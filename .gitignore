@@ -1,0 +1,12 @@
+data/
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+dist/
+build/
+*.egg-info/
+external-skills/
+findings.md
+progress.md
+task_plan.md

@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>拷打式复盘单</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg-gray: #c0c0c0;
+      --bg-light: #d4d0c8;
+      --bg-dark: #808080;
+      --white: #ffffff;
+      --black: #000000;
+      --text-dark: #222222;
+      --text-gray: #555555;
+      --blue-navy: #000080;
+      --blue-bright: #0000a0;
+      --blue-light: #1084d0;
+      --green-retro: #008000;
+      --red-retro: #800000;
+      --yellow-retro: #808000;
+      --cyan-retro: #008080;
+      --btn-highlight: #ffffff;
+      --btn-shadow: #404040;
+      --btn-dark-shadow: #000000;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { background: var(--bg-dark); }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "MS Sans Serif", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      color: var(--text-dark);
+      background: var(--bg-dark);
+      line-height: 1.45;
+      font-size: 16px;
+    }
+    .crt-overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 20;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.03) 0,
+        rgba(0, 0, 0, 0.03) 1px,
+        transparent 1px,
+        transparent 3px
+      );
+    }
+    .desktop {
+      min-height: 100vh;
+      padding: 18px;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(255,255,255,0.06) 1px, transparent 1px),
+        var(--bg-dark);
+      background-size: 24px 24px;
+    }
+    .win-window {
+      background: var(--bg-light);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      box-shadow: inset 1px 1px 0 var(--btn-highlight), inset -1px -1px 0 var(--btn-shadow);
+    }
+    .app-window {
+      display: flex;
+      flex-direction: column;
+      width: min(1180px, 100%);
+      min-height: calc(100vh - 36px);
+      margin: 0 auto;
+    }
+    .win-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 28px;
+      padding: 4px 8px;
+      color: var(--white);
+      background: linear-gradient(90deg, var(--blue-navy) 0%, var(--blue-bright) 100%);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      line-height: 1;
+    }
+    .win-title-left {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 8px;
+    }
+    .win-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+      color: var(--blue-navy);
+      background: var(--white);
+      border: 1px solid var(--black);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .win-title-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .win-buttons {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 3px;
+    }
+    .win-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 18px;
+      color: var(--text-dark);
+      background: var(--bg-light);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .win-body {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 14px;
+      padding: 16px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      color: var(--blue-navy);
+      font-size: 32px;
+      line-height: 1.15;
+    }
+    h2 { font-size: 18px; margin: 20px 0 10px; color: var(--blue-navy); }
+    button, input, textarea {
+      font: inherit;
+    }
+    .app-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+      gap: 14px;
+      align-items: stretch;
+    }
+    .header-copy, .system-panel, .toolbar, .question, #result {
+      background: var(--bg-light);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      box-shadow: inset 1px 1px 0 var(--btn-highlight), inset -1px -1px 0 var(--btn-shadow);
+    }
+    .header-copy {
+      padding: 16px;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .system-panel {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      min-width: 0;
+      align-content: start;
+      font-size: 14px;
+    }
+    .system-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 5px 0;
+      border-bottom: 1px solid var(--btn-shadow);
+      box-shadow: 0 1px 0 var(--btn-highlight);
+    }
+    .system-row:last-child {
+      border-bottom: 0;
+      box-shadow: none;
+    }
+    .status-ok { color: var(--green-retro); font-weight: 700; }
+    .status-warn { color: var(--yellow-retro); font-weight: 700; }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--text-gray);
+      font-size: 14px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      padding: 3px 8px;
+      background: var(--bg-light);
+      color: var(--text-dark);
+      overflow-wrap: anywhere;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+    }
+    .toolbar label {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      color: var(--text-dark);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .toolbar input {
+      min-width: 180px;
+      padding: 8px 10px;
+    }
+    .question-pane {
+      padding: 10px;
+      background: var(--white);
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+    }
+    #questions {
+      display: grid;
+      gap: 16px;
+    }
+    .question-section {
+      display: grid;
+      gap: 12px;
+    }
+    .section-title {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      color: var(--white);
+      background: var(--blue-navy);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .question {
+      position: relative;
+      padding: 18px;
+    }
+    .q-title {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+    .q-id {
+      flex: 0 0 auto;
+      background: var(--blue-navy);
+      color: var(--white);
+      min-width: 44px;
+      text-align: center;
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      padding: 3px 6px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .q-prompt { white-space: pre-wrap; font-weight: 700; }
+    .option {
+      display: block;
+      margin: 8px 0;
+      padding: 9px 10px;
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+      background: var(--white);
+      cursor: pointer;
+    }
+    .option:hover {
+      outline: 1px dotted var(--black);
+      outline-offset: -4px;
+    }
+    .option input {
+      margin-right: 8px;
+      accent-color: var(--blue-navy);
+    }
+    .fill-input {
+      width: min(420px, 100%);
+      padding: 10px 12px;
+    }
+    .toolbar input, .fill-input, textarea {
+      color: var(--text-dark);
+      background: var(--white);
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+      border-radius: 0;
+      outline: none;
+    }
+    .toolbar input:focus, .fill-input:focus, textarea:focus {
+      outline: 1px dotted var(--black);
+      outline-offset: -5px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 112px;
+      padding: 12px;
+      resize: vertical;
+    }
+    .explanation {
+      display: none;
+      margin-top: 12px;
+      padding: 12px;
+      color: var(--text-dark);
+      background: var(--white);
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+    }
+    .wrong {
+      border-color: var(--red-retro);
+      color: var(--red-retro);
+    }
+    .correct {
+      border-color: var(--green-retro);
+      color: var(--green-retro);
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px;
+      background: var(--bg-light);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+    }
+    .answer-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0;
+    }
+    .voice-status {
+      color: var(--text-gray);
+      font-size: 13px;
+    }
+    button {
+      min-height: 34px;
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      border-radius: 0;
+      padding: 7px 14px;
+      background: var(--bg-light);
+      color: var(--text-dark);
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:active {
+      border-color: var(--btn-dark-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+    }
+    button:focus {
+      outline: 1px dotted var(--black);
+      outline-offset: -5px;
+    }
+    #submitBtn {
+      color: var(--blue-navy);
+      font-weight: 700;
+    }
+    button.secondary { color: var(--blue-navy); }
+    button.light { color: var(--text-dark); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    #result {
+      padding: 16px;
+    }
+    .report-view {
+      display: grid;
+      gap: 12px;
+    }
+    .report-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px;
+      background: var(--bg-light);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+    }
+    .poster-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+      gap: 14px;
+      margin-bottom: 14px;
+      align-items: stretch;
+    }
+    .poster-score {
+      display: grid;
+      place-items: center;
+      min-height: 150px;
+      padding: 16px;
+      color: var(--white);
+      background: var(--blue-navy);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+      text-align: center;
+    }
+    .poster-score .score {
+      color: var(--white);
+      font-size: 42px;
+      line-height: 1;
+    }
+    .poster-summary {
+      display: grid;
+      gap: 8px;
+      align-content: center;
+      padding: 12px;
+      background: var(--white);
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+    }
+    .report-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .report-card {
+      padding: 10px;
+      background: var(--white);
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+    }
+    .report-card strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--blue-navy);
+    }
+    .wrong-list {
+      display: grid;
+      gap: 8px;
+      margin: 10px 0;
+      padding: 0;
+      list-style: none;
+    }
+    .wrong-list li {
+      padding: 8px 10px;
+      background: var(--white);
+      border: 1px solid var(--btn-shadow);
+    }
+    .handoff-prompt {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      padding: 10px;
+      background: var(--white);
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+      font-size: 13px;
+    }
+    .score {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--blue-navy);
+    }
+    code {
+      background: var(--white);
+      border: 1px solid var(--btn-shadow);
+      padding: 1px 4px;
+    }
+    .status-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      margin-top: auto;
+      border: 2px solid var(--btn-shadow);
+      border-right-color: var(--btn-highlight);
+      border-bottom-color: var(--btn-highlight);
+      background: var(--bg-light);
+      font-size: 13px;
+    }
+    .status-cell {
+      padding: 4px 8px;
+      border-right: 1px solid var(--btn-shadow);
+      box-shadow: 1px 0 0 var(--btn-highlight);
+    }
+    .status-cell:last-child {
+      border-right: 0;
+      box-shadow: none;
+    }
+    ::-webkit-scrollbar { width: 16px; }
+    ::-webkit-scrollbar-track { background: var(--bg-gray); }
+    ::-webkit-scrollbar-thumb {
+      background: var(--bg-gray);
+      border: 2px solid var(--btn-highlight);
+      border-right-color: var(--btn-dark-shadow);
+      border-bottom-color: var(--btn-dark-shadow);
+    }
+    @media (max-width: 820px) {
+      .desktop { padding: 10px; }
+      .app-window { min-height: calc(100vh - 20px); }
+      .win-body { padding: 10px; }
+      .app-header { grid-template-columns: 1fr; }
+      .question { padding: 14px; }
+      .q-title { flex-direction: column; }
+      .toolbar label { width: 100%; }
+      .toolbar input { min-width: 0; width: 100%; }
+      button { flex: 1 1 160px; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="crt-overlay" aria-hidden="true"></div>
+  <div class="desktop">
+    <div class="win-window app-window">
+      <div class="win-titlebar">
+        <div class="win-title-left">
+          <span class="win-icon">K</span>
+          <span class="win-title-text">KAODA_REVIEW.EXE</span>
+        </div>
+        <div class="win-buttons" aria-hidden="true">
+          <span class="win-btn">_</span>
+          <span class="win-btn">[]</span>
+          <span class="win-btn">X</span>
+        </div>
+      </div>
+      <main class="win-body">
+        <header class="app-header">
+          <div class="header-copy">
+            <h1 id="title">拷打式复盘单</h1>
+            <div class="meta" id="meta"></div>
+          </div>
+          <aside class="system-panel" aria-label="复盘状态">
+            <div class="system-row"><span>STATUS</span><span class="status-ok">READY</span></div>
+            <div class="system-row"><span>MODE</span><span class="status-warn">CHECK</span></div>
+            <div class="system-row"><span>MEMORY</span><span>LOCAL</span></div>
+          </aside>
+        </header>
+        <div class="toolbar" id="examToolbar">
+          <label>学习者 ID <input id="learnerId" value="default"></label>
+          <span class="pill">轻量回顾</span>
+          <span class="pill">客观校准</span>
+          <span class="pill" id="agentReviewPill">agent 复核</span>
+        </div>
+        <section class="question-pane" id="examPane">
+          <section id="questions"></section>
+        </section>
+        <div class="actions" id="examActions">
+          <button id="submitBtn">提交试卷</button>
+        </div>
+        <section class="report-view" id="reportView" hidden>
+          <section id="result" aria-live="polite"></section>
+          <div class="report-actions">
+            <button id="exportAgentReportBtn">导出报告给 Agent</button>
+          </div>
+        </section>
+        <div class="status-bar" aria-hidden="true">
+          <span class="status-cell">KAODA READY</span>
+          <span class="status-cell">RETRO WINDOWS</span>
+          <span class="status-cell">LOCAL HTML</span>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script id="exam-data" type="application/json">__EXAM_JSON__</script>
+  <script>
+    const exam = JSON.parse(document.getElementById("exam-data").textContent);
+    const state = { submitted: false, view: "exam", objective: null, mistakes: [] };
+
+    function $(id) { return document.getElementById(id); }
+    function hasOpenQuestions() { return exam.questions.some(q => q.type === "open"); }
+    const TYPE_LABELS = {
+      single_choice: "单选题",
+      multiple_choice: "多选题",
+      true_false: "判断题",
+      fill_blank: "填空题",
+      open: "简答/口述题"
+    };
+    const TYPE_ORDER = ["single_choice", "multiple_choice", "true_false", "fill_blank", "open"];
+    const AGENT_EXPORT_INSTRUCTION = "请使用 kaoda-review 读取本报告中的 attempt.json 和 exam.json：先对客观题复核，对简答/口述题按 rubric 二次评分，生成 grade.json，然后执行 record 归档错题、错因和本次试卷。";
+
+    function typeLabel(type) {
+      return TYPE_LABELS[type] || type || "题目";
+    }
+
+    function questionSections() {
+      const byId = new Map(exam.questions.map(q => [q.id, q]));
+      const used = new Set();
+      const declared = (exam.question_sections || []).map(section => {
+        const questions = (section.question_ids || []).map(id => byId.get(id)).filter(Boolean);
+        questions.forEach(q => used.add(q.id));
+        return {
+          type: section.type,
+          label: section.label || typeLabel(section.type),
+          questions
+        };
+      }).filter(section => section.questions.length);
+      const leftovers = exam.questions.filter(q => !used.has(q.id));
+      for (const type of TYPE_ORDER) {
+        const questions = leftovers.filter(q => q.type === type);
+        if (questions.length) declared.push({ type, label: typeLabel(type), questions });
+      }
+      return declared.length ? declared : [{ type: "all", label: "题目", questions: exam.questions }];
+    }
+
+    function render() {
+      $("title").textContent = exam.title || "拷打式复盘单";
+      $("meta").innerHTML = [
+        ["模式", exam.review_mode || exam.mode],
+        ["题目风格", exam.question_style],
+        ["类型", exam.exam_kind],
+        ["时长", exam.duration_minutes ? `${exam.duration_minutes}分钟` : ""],
+        ["检查点", exam.questions.length],
+        ["来源", exam.material_source && (exam.material_source.title || exam.material_source.input)]
+      ].filter(x => x[1]).map(([k, v]) => `<span class="pill">${k}: ${escapeHtml(String(v)).slice(0, 80)}</span>`).join("");
+      const needsAgent = hasOpenQuestions();
+      $("agentReviewPill").style.display = needsAgent ? "" : "none";
+
+      const indexById = new Map(exam.questions.map((q, idx) => [q.id, idx + 1]));
+      $("questions").innerHTML = questionSections().map(section => `
+        <section class="question-section" data-section-type="${escapeHtml(section.type)}">
+          <h2 class="section-title">${escapeHtml(section.label)}</h2>
+          ${section.questions.map(q => renderQuestion(q, indexById.get(q.id))).join("")}
+        </section>
+      `).join("");
+      setupVoiceButtons();
+      $("reportView").hidden = true;
+    }
+
+    function renderQuestion(q, index) {
+      let answer = "";
+      if (q.type === "single_choice" || q.type === "multiple_choice" || q.type === "true_false") {
+        const inputType = q.type === "multiple_choice" ? "checkbox" : "radio";
+        answer = q.options.map(opt => `
+          <label class="option" data-qid="${q.id}" data-opt="${opt.id}">
+            <input type="${inputType}" name="${q.id}" value="${opt.id}">
+            <strong>${opt.id}.</strong> ${escapeHtml(opt.text)}
+          </label>
+        `).join("");
+      } else if (q.type === "fill_blank") {
+        answer = `<input class="fill-input" data-fill-answer="${q.id}" placeholder="填关键词或短语">`;
+      } else {
+        const placeholder = q.answer_mode === "oral"
+          ? "可以先口述，再整理成几句话。重点写怎么做、何时失效、怎么验证。"
+          : "短答即可，1-3 句话。";
+        const voice = q.voice_enabled ? `
+          <div class="answer-tools">
+            <button type="button" class="light" data-voice-target="${q.id}">开始口述</button>
+            <span class="voice-status" data-voice-status="${q.id}"></span>
+          </div>
+        ` : "";
+        answer = `${voice}<textarea data-open-answer="${q.id}" placeholder="${placeholder}"></textarea>`;
+      }
+      return `
+        <article class="question" id="${q.id}">
+          <div class="q-title">
+            <span class="q-id">${index}</span>
+            <div class="q-prompt">${escapeHtml(q.prompt)}</div>
+          </div>
+          ${answer}
+          <div class="explanation" data-explanation="${q.id}">
+            <strong>解析：</strong>${escapeHtml(q.explanation || "")}
+            ${q.source && q.source.excerpt ? `<div><strong>来源片段：</strong>${escapeHtml(q.source.excerpt)}</div>` : ""}
+          </div>
+        </article>
+      `;
+    }
+
+    function collectAnswers() {
+      const answers = {};
+      for (const q of exam.questions) {
+        if (q.type === "single_choice" || q.type === "true_false") {
+          const checked = document.querySelector(`input[name="${q.id}"]:checked`);
+          answers[q.id] = checked ? [checked.value] : [];
+        } else if (q.type === "multiple_choice") {
+          answers[q.id] = [...document.querySelectorAll(`input[name="${q.id}"]:checked`)].map(el => el.value);
+        } else if (q.type === "fill_blank") {
+          const input = document.querySelector(`[data-fill-answer="${q.id}"]`);
+          answers[q.id] = input ? input.value : "";
+        } else {
+          const textarea = document.querySelector(`[data-open-answer="${q.id}"]`);
+          answers[q.id] = textarea ? textarea.value : "";
+        }
+      }
+      return answers;
+    }
+
+    function sameSet(a, b) {
+      return JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
+    }
+
+    function normalizeObjectiveText(value) {
+      return String(value || "").replace(/\s+/g, "").trim().toLowerCase();
+    }
+
+    function fillBlankOk(answer, accepted) {
+      const actual = normalizeObjectiveText(answer);
+      return (accepted || []).some(item => {
+        const expected = normalizeObjectiveText(item);
+        return expected && (actual === expected || actual.includes(expected));
+      });
+    }
+
+    function submit() {
+      if (!window.confirm("确认交卷后会生成学习报告，是否提交？")) return;
+      const answers = collectAnswers();
+      let score = 0;
+      let total = 0;
+      const byType = {};
+      const mistakes = [];
+      for (const q of exam.questions) {
+        const exp = document.querySelector(`[data-explanation="${q.id}"]`);
+        if (exp) exp.style.display = "block";
+        if (q.type === "fill_blank" || q.type === "single_choice" || q.type === "multiple_choice" || q.type === "true_false") {
+          total += 1;
+          if (!byType[q.type]) byType[q.type] = { label: typeLabel(q.type), score: 0, total: 0 };
+          byType[q.type].total += 1;
+          const ok = q.type === "fill_blank"
+            ? fillBlankOk(answers[q.id], q.accepted_answers || q.answer)
+            : sameSet(answers[q.id], q.answer);
+          if (ok) score += 1;
+          if (ok) byType[q.type].score += 1;
+          if (q.type === "fill_blank") {
+            const input = document.querySelector(`[data-fill-answer="${q.id}"]`);
+            if (input) {
+              input.classList.remove("correct", "wrong");
+              input.classList.add(ok ? "correct" : "wrong");
+            }
+          } else {
+            for (const label of document.querySelectorAll(`[data-qid="${q.id}"]`)) {
+              label.classList.remove("correct", "wrong");
+              const opt = label.dataset.opt;
+              if ((q.answer || []).includes(opt)) label.classList.add("correct");
+              if ((answers[q.id] || []).includes(opt) && !(q.answer || []).includes(opt)) label.classList.add("wrong");
+            }
+          }
+          if (!ok) mistakes.push(q);
+        }
+      }
+      state.submitted = true;
+      state.objective = { score, total, by_type: byType };
+      state.mistakes = mistakes;
+      showReportView();
+    }
+
+    function scorePercent(score, total) {
+      return total ? Math.round((score / total) * 100) : 0;
+    }
+
+    function typeScoreCards() {
+      const byType = state.objective && state.objective.by_type ? state.objective.by_type : {};
+      return TYPE_ORDER.filter(type => byType[type]).map(type => {
+        const row = byType[type];
+        return `<div class="report-card"><strong>${escapeHtml(row.label)}</strong>${row.score}/${row.total}</div>`;
+      }).join("");
+    }
+
+    function weakKnowledgeList(mistakes) {
+      const counts = new Map();
+      for (const q of mistakes) {
+        const name = q.knowledge_point && q.knowledge_point.name ? q.knowledge_point.name : "未命名知识点";
+        counts.set(name, (counts.get(name) || 0) + 1);
+      }
+      return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    }
+
+    function nextStepHtml() {
+      if (hasOpenQuestions()) {
+        return `
+          <p>这份复盘含简答/口述题，当前分数是客观题预评分。点击 <strong>导出报告给 Agent</strong>，Agent 会继续评简答/口述、生成最终分数，并把错题写入错题集。</p>
+        `;
+      }
+      return `
+        <p>本页已完成客观题评分。点击 <strong>导出报告给 Agent</strong> 后，Agent 可以复核分数、记录错题并归档本次试卷。</p>
+      `;
+    }
+
+    function performanceText(percent, mistakes, openCount) {
+      if (openCount) return "客观题已完成预评分，简答/口述需要 Agent 复核后才算最终成绩。";
+      if (percent >= 90 && !mistakes.length) return "掌握不错，可以进入更高强度或加入历史错题复盘。";
+      if (percent >= 70) return "整体能跟上，但有几个知识点还不稳，建议先处理错题。";
+      if (percent >= 50) return "基础概念有印象，但边界、条件和迁移还需要补。";
+      return "这次暴露的问题比较多，建议回到材料重新看核心概念和错题解析。";
+    }
+
+    function showReportView() {
+      state.view = "report";
+      $("examToolbar").hidden = true;
+      $("examPane").hidden = true;
+      $("examActions").hidden = true;
+      $("reportView").hidden = false;
+      $("result").innerHTML = renderReport(state.mistakes || []);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function renderReport(mistakes) {
+      const objective = state.objective || { score: 0, total: 0, by_type: {} };
+      const weak = weakKnowledgeList(mistakes);
+      const percent = scorePercent(objective.score, objective.total);
+      const mistakeRows = mistakes.length
+        ? `<ul class="wrong-list">${mistakes.map(q => `
+            <li><strong>${escapeHtml(q.id)} · ${escapeHtml(q.knowledge_point ? q.knowledge_point.name : "")}</strong><br>${escapeHtml(q.prompt)}</li>
+          `).join("")}</ul>`
+        : "<p>客观题没有错漏。</p>";
+      const weakRows = weak.length
+        ? `<ul>${weak.map(([name, count]) => `<li>${escapeHtml(name)}：${count} 题需要回看</li>`).join("")}</ul>`
+        : "<p>暂时没有明显薄弱知识点。</p>";
+      const openCount = exam.questions.filter(q => q.type === "open").length;
+      const typeTotalRows = TYPE_ORDER
+        .map(type => ({ type, total: exam.questions.filter(q => q.type === type).length }))
+        .filter(row => row.total)
+        .map(row => `<div class="report-card"><strong>${escapeHtml(typeLabel(row.type))}</strong>${row.total} 题</div>`)
+        .join("");
+      return `
+        <div class="poster-hero">
+          <div class="poster-score">
+            <div>
+              <div>本次得分</div>
+              <div class="score">${objective.score}/${objective.total}</div>
+              <div>${percent}%</div>
+            </div>
+          </div>
+          <div class="poster-summary">
+            <h2>学习报告</h2>
+            <p>${escapeHtml(performanceText(percent, mistakes, openCount))}</p>
+            <p>错题：${mistakes.length} 题</p>
+            ${openCount ? `<p>待 Agent 复核：${openCount} 道简答/口述题</p>` : "<p>本次已在网页内完成评分。</p>"}
+          </div>
+        </div>
+        <h2>题型得分</h2>
+        <div class="report-grid">${typeScoreCards()}</div>
+        <h2>题型构成</h2>
+        <div class="report-grid">${typeTotalRows}</div>
+        <h2>错题</h2>
+        ${mistakeRows}
+        <h2>薄弱知识点</h2>
+        ${weakRows}
+        <h2>下一步</h2>
+        ${nextStepHtml()}
+      `;
+    }
+
+    function buildAttempt() {
+      return {
+        version: "1.0",
+        exported_at: new Date().toISOString(),
+        learner_id: $("learnerId").value || "default",
+        exam_id: exam.exam_id,
+        run_id: exam.run_id,
+        exam_path: "exam.json",
+        objective_pregrade: state.objective,
+        answers: collectAnswers()
+      };
+    }
+
+    function agentReportMarkdown() {
+      const attempt = buildAttempt();
+      const objective = state.objective || { score: 0, total: 0, by_type: {} };
+      const percent = scorePercent(objective.score, objective.total);
+      const typeLines = TYPE_ORDER
+        .filter(type => objective.by_type && objective.by_type[type])
+        .map(type => {
+          const row = objective.by_type[type];
+          return `- ${row.label}: ${row.score}/${row.total}`;
+        });
+      const mistakes = state.mistakes || [];
+      const weak = weakKnowledgeList(mistakes);
+      const openCount = exam.questions.filter(q => q.type === "open").length;
+      return [
+        `# kaoda-review Agent 报告包`,
+        "",
+        "## Agent 执行说明",
+        "",
+        AGENT_EXPORT_INSTRUCTION,
+        "",
+        "请输出最终 `grade.json`，并执行或指导执行：",
+        "",
+        "```bash",
+        "python scripts/kaoda.py record grade.json",
+        "```",
+        "",
+        "记录时需要把错题、错因、试卷、答案和评分结果归档到 learner 的错题集与 archive。",
+        "",
+        "## 学习报告摘要",
+        "",
+        `- title: ${exam.title}`,
+        `- learner_id: ${attempt.learner_id}`,
+        `- objective_pregrade: ${state.objective ? `${objective.score}/${objective.total} (${percent}%)` : "not completed"}`,
+        `- open_questions_need_agent_review: ${openCount}`,
+        `- mistake_count: ${mistakes.length}`,
+        `- performance_note: ${performanceText(percent, mistakes, openCount)}`,
+        "",
+        "## 题型得分",
+        ...(typeLines.length ? typeLines : ["- not completed"]),
+        "",
+        "## 错题",
+        ...(mistakes.length
+          ? mistakes.flatMap(q => [
+              `- ${q.id} ${q.knowledge_point ? q.knowledge_point.name : ""}`,
+              `  - 题目：${q.prompt}`,
+              `  - 解析：${q.explanation || ""}`
+            ])
+          : ["- 客观题没有错漏。"]),
+        "",
+        "## 薄弱知识点",
+        ...(weak.length
+          ? weak.map(([name, count]) => `- ${name}: ${count} 题需要回看`)
+          : ["- 暂时没有明显薄弱知识点。"]),
+        "",
+        "## 用户完整答案",
+        "",
+        "```json",
+        JSON.stringify(attempt.answers, null, 2),
+        "```",
+        "",
+        "## attempt.json",
+        "",
+        "```json",
+        JSON.stringify(attempt, null, 2),
+        "```",
+        "",
+        "## exam.json",
+        "",
+        "```json",
+        JSON.stringify(exam, null, 2),
+        "```"
+      ].join("\n");
+    }
+
+    function download(name, content, type = "application/json") {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+      }[ch]));
+    }
+
+    let activeRecognition = null;
+
+    function setupVoiceButtons() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      for (const button of document.querySelectorAll("[data-voice-target]")) {
+        const qid = button.dataset.voiceTarget;
+        const status = document.querySelector(`[data-voice-status="${qid}"]`);
+        if (!SpeechRecognition) {
+          button.disabled = true;
+          if (status) status.textContent = "当前浏览器不支持语音输入";
+          continue;
+        }
+        button.addEventListener("click", () => startVoiceInput(qid, button, status, SpeechRecognition));
+      }
+    }
+
+    function startVoiceInput(qid, button, status, SpeechRecognition) {
+      const textarea = document.querySelector(`[data-open-answer="${qid}"]`);
+      if (!textarea) return;
+      if (activeRecognition) activeRecognition.stop();
+      const recognition = new SpeechRecognition();
+      activeRecognition = recognition;
+      recognition.lang = "zh-CN";
+      recognition.interimResults = false;
+      recognition.continuous = false;
+      button.disabled = true;
+      button.textContent = "正在听...";
+      if (status) status.textContent = "请开始说";
+      recognition.onresult = event => {
+        const transcript = event.results && event.results[0] && event.results[0][0]
+          ? event.results[0][0].transcript
+          : "";
+        textarea.value = `${textarea.value ? textarea.value + "\n" : ""}${transcript}`.trim();
+      };
+      recognition.onerror = event => {
+        if (status) status.textContent = `语音输入失败：${event.error || "unknown"}`;
+      };
+      recognition.onend = () => {
+        activeRecognition = null;
+        button.disabled = false;
+        button.textContent = "继续口述";
+        if (status && !status.textContent.startsWith("语音输入失败")) status.textContent = "已写入文本框";
+      };
+      recognition.start();
+    }
+
+    $("submitBtn").addEventListener("click", submit);
+    $("exportAgentReportBtn").addEventListener("click", () => download("kaoda_agent_report.md", agentReportMarkdown(), "text/markdown"));
+    render();
+  </script>
+</body>
+</html>

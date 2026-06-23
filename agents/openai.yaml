@@ -1,0 +1,7 @@
+interface:
+  display_name: "拷打式复盘"
+  short_description: "先研究材料，再生成拷问式理解复盘"
+  brand_color: "#BB3E1D"
+  default_prompt: "Use $kaoda-review to research this topic or learning material first, then ask lightweight mode/style choices and generate an interactive understanding review checklist."
+policy:
+  allow_implicit_invocation: true

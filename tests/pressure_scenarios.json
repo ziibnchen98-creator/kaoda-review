@@ -1,0 +1,68 @@
+[
+  {
+    "id": "video_transcript_pressure",
+    "prompt": "我刚看完一个 B 站 AI 教程，这是字幕文件。请不要总结，帮我生成一张能拷问我是否真的理解的 HTML 复盘单，并保留错题记录。",
+    "expected_behavior": [
+      "uses ingest on subtitle",
+      "analyzes source content and completes mandatory research before asking mode/style",
+      "asks only lightweight post-research choices: review mode/time and question style",
+      "records research/deepening as mandatory completed in exam_brief.json",
+      "builds a review checklist with source timestamps",
+      "uses normal mode by default: 20 checkpoints with no open answers unless a heavier mode is selected",
+      "includes mechanism, boundary, transfer, misconception questions",
+      "does not stop at a summary"
+    ],
+    "failure_to_watch_for": "agent produces a study guide or ordinary recall quiz"
+  },
+  {
+    "id": "pdf_no_notes_pressure",
+    "prompt": "这是一个 PDF 课程资料，我没记笔记。帮我做拷打式复盘，最好能让我答题后知道自己哪里在装懂。",
+    "expected_behavior": [
+      "extracts PDF text with page provenance",
+      "does mandatory focused research before asking lightweight choices",
+      "asks question style rather than tone",
+      "creates exam.json and exam.html",
+      "uses fully browser-scored objective questions in normal mode",
+      "shows agent grading export only when short or oral answers exist",
+      "records mistake tags by knowledge point"
+    ],
+    "failure_to_watch_for": "agent summarizes chapters without generating answerable diagnostics"
+  },
+  {
+    "id": "weekly_synthesis_pressure",
+    "prompt": "我这周学了 3 个视频和 2 篇文章，之前错题也不少。请出一张周考综合拷问卷，但不要复用旧题。",
+    "expected_behavior": [
+      "reads mistake_bank.jsonl and recent grade/material reports",
+      "generates variants around weak knowledge points",
+      "changes scenarios and question wording",
+      "produces weekly analysis with top fake-understanding areas"
+    ],
+    "failure_to_watch_for": "agent concatenates old questions or makes a generic weekly quiz"
+  },
+  {
+    "id": "generic_distractor_regression",
+    "prompt": "这是一个讲 Tokenizer 和上下文窗口的字幕。请生成拷打式复盘单，重点看我是不是把 token 当成普通英文单词来理解。",
+    "expected_behavior": [
+      "uses source segments that mention Tokenizer/token rather than intro chatter",
+      "writes material-specific misconceptions into objective distractors",
+      "keeps normal mode free of long written answers unless a heavier mode is selected",
+      "includes varied style families such as friend roast, boss follow-up, counterexample hunt, or one-glance fake",
+      "asks boundary and transfer questions about tokenization, context length, multilingual text, or symbols",
+      "does not reuse the same generic keyword-memorization distractors for every concept"
+    ],
+    "failure_to_watch_for": "review checkpoints mention Tokenizer only as a label while options stay generic, detached from source evidence, or dominated by long written prompts"
+  },
+  {
+    "id": "topic_only_research_pressure",
+    "prompt": "我想了解 token，不给资料，你自己研究一下然后拷打我。",
+    "expected_behavior": [
+      "runs research-topic instead of inventing from the bare word",
+      "researches reliable sources and writes topic_research.md plus source_links.json",
+      "runs ingest-topic before plan-exam",
+      "performs mandatory deepening before asking mode/style",
+      "generates a review checklist from the research notes",
+      "archives exam, attempt, grade, and wrong questions after record"
+    ],
+    "failure_to_watch_for": "agent immediately creates questions from the word token without research notes or source links"
+  }
+]
