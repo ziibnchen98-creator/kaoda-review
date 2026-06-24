@@ -1,5 +1,11 @@
 # Rubrics
 
+## Local Pregrade Boundary
+
+HTML and `grade-report` only finalize objective questions. They may attach a `pregrade_hint` to open answers, but that hint is not a score and must not be counted into the final total.
+
+Before `record`, every open answer must be reviewed by an Agent using this rubric. Final open results must set `score_status` to `completed` or remove it; `pending_agent_review` means the answer is not ready to archive.
+
 ## Open Answer Scale
 
 Score open answers by level, not by exact match.
@@ -19,6 +25,7 @@ For every open question, output:
 ```json
 {
   "question_id": "q05",
+  "score_status": "completed",
   "score": 3,
   "max_score": 4,
   "rubric_level": 3,
@@ -38,6 +45,7 @@ For every open question, output:
 ## Scoring Rules
 
 - Evidence before score.
+- Never use the local `pregrade_hint` as the final score.
 - Penalize confident but unsupported answers.
 - Penalize long answers that do not answer mechanism, boundary, or transfer.
 - Do not give level 4 without a counterexample or failure signal.

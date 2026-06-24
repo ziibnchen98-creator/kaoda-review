@@ -1,6 +1,6 @@
 ---
 name: kaoda-review
-description: "Use when a learner wants to convert YouTube/Bilibili videos, PDFs, articles, subtitles, notes, or a topic they want to understand into a “拷打式复盘” diagnostic: research-backed interactive HTML review checklists, single-choice/multiple-choice/true-false/fill-in checkpoints, a small number of rubric-scored short or oral answers, one-click Agent report export, archived attempts, mistake-bank records, variant review, and weekly synthesis reviews that expose fake understanding, weak transfer, misconception, and boundary-blindness."
+description: "Use when a learner wants to convert YouTube/Bilibili videos, local audio/video transcripts, PDFs, articles, subtitles, notes, or a topic they want to understand into a “拷打式复盘” diagnostic: research-backed interactive HTML review checklists, single-choice/multiple-choice/true-false/fill-in checkpoints, a small number of Agent-rubric-scored short or oral answers, one-click Agent report export, archived attempts, mistake-bank records, variant review, and weekly synthesis reviews that expose fake understanding, weak transfer, misconception, and boundary-blindness."
 ---
 
 # 拷打式复盘
@@ -26,6 +26,7 @@ Default output is a low-stakes review checklist, not a formal exam. The default 
 ## Workflow
 
 1. If the user provides a concrete material, run `python scripts/kaoda.py ingest <input>` to create `data/runs/<run_id>/segments.jsonl`.
+   - If ingest returns `status: needs_text`, explain the extraction issue plainly, help the user provide text in `manual_input.txt` or `manual_transcript.txt`, then run `python scripts/kaoda.py ingest-manual <run_id>`.
 2. If the user only gives a title or topic, run `python scripts/kaoda.py research-topic "<topic>"`, perform focused research, write `topic_research.md` and `source_links.json`, then run `python scripts/kaoda.py ingest-topic <run_id>`.
 3. Read `data/runs/<run_id>/material_report.json`.
 4. Read `references/intake_and_research.md`.
@@ -38,7 +39,7 @@ Default output is a low-stakes review checklist, not a formal exam. The default 
 11. Run `python scripts/kaoda.py build-exam <run_id>` to create `exam.json`, `exam.html`, and `grading_prompt.md`.
 12. Let the learner complete the review in `exam.html`. The visible UI should keep the flow simple: `提交试卷`, then a report page with `导出报告给 Agent`.
 13. Read the exported `kaoda_agent_report.md`; it contains `attempt.json`, `exam.json`, objective pregrade, answers, and instructions for agent scoring/recording. Run `python scripts/kaoda.py grade-report <kaoda_agent_report.md> --learner-id <id>` to generate `attempt.json`, `exam.json`, `grading_prompt.md`, and `grade.json`.
-14. If `grade.json.open_review.status` is `pending_agent_review`, use `agent_open_review.md` to rubric-score short/oral answers, then set `open_review.status` to `completed` and update open-question results before recording.
+14. If `grade.json.open_review.status` is `pending_agent_review`, use `agent_open_review.md` to rubric-score short/oral answers, then set `open_review.status` to `completed`, set every open result `score_status` to `completed` or remove it, and update open-question scores/evidence before recording.
 15. Run `python scripts/kaoda.py record <grade.json>` to append mistakes and archive the full exam/attempt/grade/HTML plus source/material/deep-research files under `data/learners/<id>/archive/`. `record` refuses pending open-answer pregrades.
 16. Run `python scripts/kaoda.py dashboard <id>` to refresh the static learner hub: total score board, exam collection, wrong-question board, and plain-language notes.
 17. Run `python scripts/kaoda.py review <id>` for variant review or `python scripts/kaoda.py weekly <id> --since 7d` for the weekly synthesis exam.
@@ -78,7 +79,7 @@ Hard rules:
 
 - Preserve source provenance: page, timestamp, URL, or segment id.
 - Prefer subtitles/PDF text/user text before audio transcription.
-- If a video has no accessible subtitles and transcription is not available, stop and ask for a transcript.
+- If a video, local media file, scanned PDF, or article page cannot yield usable text, use the generated `manual_input.txt`/`manual_transcript.txt` workspace and `ingest-manual`; do not generate questions from titles, URLs, file names, or snippets.
 - Mark extension research separately from source-derived knowledge.
 
 ## Quality Gates
@@ -103,6 +104,8 @@ Required files for a normal run:
 - `mistake_bank.jsonl` after recording mistakes
 - `dashboard/index.html`, `dashboard/exams.html`, `dashboard/mistakes.html`, and `dashboard/notes.html` after refreshing the learner dashboard
 - `dashboard/notes_agent_pack.md` when the learner wants an Agent to rewrite notes in a more natural personal voice
+
+When extraction is blocked, required continuation files are `source_status.json`, `manual_input.txt` or `manual_transcript.txt`, and `manual_text_request.md`; after `ingest-manual`, continue with the normal required files.
 
 ## Do Not
 

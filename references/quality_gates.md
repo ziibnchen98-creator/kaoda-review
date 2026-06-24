@@ -8,6 +8,8 @@ Run these checks before presenting a generated review checklist or report.
 - Every PDF segment has a page locator.
 - Every subtitle segment has timestamp information.
 - Article segments have URL locator.
+- When video/PDF/article/media extraction is blocked, `source_status.json` and a manual text file exist; no exam is generated until `ingest-manual` creates `segments.jsonl`.
+- Local audio/video files use same-name transcript sidecars or manual transcript fallback; file names alone are never source evidence.
 - Extension content is marked `extension: true`.
 - Topic-only reviews have `topic_research.md` and `source_links.json`; the bare topic string is not treated as source evidence.
 
@@ -62,6 +64,9 @@ Run these checks before presenting a generated review checklist or report.
 - `grade-report <kaoda_agent_report.md>` parses the exported report and writes `attempt.json`, `exam.json`, `grading_prompt.md`, and `grade.json`.
 - `grade.json.open_review.status` is `not_required` for objective-only reviews, `pending_agent_review` before open-answer rubric review, or `completed` after Agent review.
 - `record` must refuse `pending_agent_review` so heuristic open pregrades are not archived as final scores.
+- `record` must also refuse `open_review.status: completed` when any open result still has `score_status: pending_agent_review`.
+- Before Agent review, open-question scores are not counted in `score.total`; the total is objective pregrade only and `score.open` is `null`.
+- Before `record`, `score.total` and `score.max_total` must match the sum of `question_results[].score` and `question_results[].max_score`.
 - Every open result includes evidence before score.
 - Every wrong answer has a mistake tag.
 - Every wrong answer has `learn_from` or equivalent source/knowledge-point guidance.

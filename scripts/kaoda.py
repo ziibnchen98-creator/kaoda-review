@@ -19,6 +19,7 @@ import sys
 import textwrap
 import urllib.parse
 import urllib.request
+import zlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -292,6 +293,15 @@ CHINESE_TOPIC_CUES = [
     "错因",
 ]
 
+AUDIO_FILE_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+VIDEO_FILE_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
+TRANSCRIPT_SUFFIXES = {".srt", ".vtt", ".txt", ".md", ".markdown"}
+ARTICLE_SKIP_TAGS = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "button"}
+ARTICLE_JUNK_ATTR_PATTERN = re.compile(
+    r"\b(comment|comments|advert|advertisement|ad-|ads|sidebar|cookie|modal|subscribe|share|related|recommend)\b",
+    re.I,
+)
+
 
 class KaodaError(RuntimeError):
     """Actionable CLI error."""
@@ -427,7 +437,13 @@ def detect_input(value: str) -> str:
             return "subtitle"
         if suffix in {".txt", ".md", ".markdown"}:
             return "text_file"
-        raise KaodaError(f"Unsupported file type: {suffix}. Use PDF, SRT, VTT, TXT, or MD.")
+        if suffix in AUDIO_FILE_SUFFIXES:
+            return "audio_file"
+        if suffix in VIDEO_FILE_SUFFIXES:
+            return "video_file"
+        raise KaodaError(
+            f"Unsupported file type: {suffix}. Use PDF, SRT, VTT, TXT, MD, or common audio/video files."
+        )
     return "inline_text"
 
 
@@ -561,6 +577,45 @@ def parse_subtitle(path: Path, source_id: str) -> list[Segment]:
     return segments
 
 
+def find_sidecar_transcript(path: Path) -> Path | None:
+    direct = [path.with_suffix(suffix) for suffix in TRANSCRIPT_SUFFIXES]
+    fuzzy = [
+        candidate
+        for candidate in sorted(path.parent.glob(f"{path.stem}.*"))
+        if candidate.suffix.lower() in TRANSCRIPT_SUFFIXES
+    ]
+    for candidate in direct + fuzzy:
+        if candidate.exists() and candidate.is_file() and candidate.resolve() != path.resolve():
+            return candidate.resolve()
+    return None
+
+
+def extract_media_file_transcript(path: Path, run_dir: Path) -> tuple[list[Segment], dict[str, Any]]:
+    source_id = f"media-{stable_slug(str(path.resolve()), 8)}"
+    sidecar = find_sidecar_transcript(path)
+    metadata: dict[str, Any] = {
+        "method": "media sidecar transcript",
+        "path": str(path),
+        "sidecar_transcript": str(sidecar) if sidecar else None,
+    }
+    if not sidecar:
+        raise KaodaError(
+            "Audio/video file needs a same-name SRT/VTT/TXT/MD transcript, or a local transcription step before ingest."
+        )
+    if sidecar.suffix.lower() in {".srt", ".vtt"}:
+        segments = parse_subtitle(sidecar, source_id)
+    else:
+        text = sidecar.read_text(encoding="utf-8", errors="replace")
+        segments = make_segments_from_text(
+            text,
+            source_id,
+            locator_base={"media_path": str(path), "transcript_path": str(sidecar)},
+        )
+    if not segments:
+        raise KaodaError(f"No usable transcript text found next to media file: {path}")
+    return segments, metadata
+
+
 def extract_video_subtitles(url: str, run_dir: Path) -> tuple[list[Segment], dict[str, Any]]:
     if not command_exists("yt-dlp"):
         raise KaodaError("yt-dlp is required for video URLs. Install yt-dlp or provide an SRT/VTT/TXT file.")
@@ -599,16 +654,26 @@ def extract_video_subtitles(url: str, run_dir: Path) -> tuple[list[Segment], dic
 
 def extract_pdf(path: Path, run_dir: Path) -> tuple[list[Segment], dict[str, Any]]:
     source_id = f"pdf-{stable_slug(str(path.resolve()), 8)}"
-    metadata: dict[str, Any] = {"method": "pdftotext", "path": str(path)}
+    metadata: dict[str, Any] = {"method": "pdf text extraction", "path": str(path), "attempts": []}
     text = ""
     if command_exists("pdftotext"):
         result = run_cmd(["pdftotext", "-layout", "-enc", "UTF-8", str(path), "-"], timeout=120)
+        metadata["attempts"].append("pdftotext")
         metadata["pdftotext_returncode"] = result.returncode
         metadata["pdftotext_stderr_tail"] = result.stderr[-1000:]
         if result.returncode == 0:
             text = result.stdout
+            metadata["method"] = "pdftotext"
+    if len(text.strip()) < 50:
+        stdlib_text = extract_pdf_text_stdlib(path)
+        metadata["attempts"].append("stdlib_pdf_text")
+        metadata["stdlib_text_chars"] = len(stdlib_text.strip())
+        if len(stdlib_text.strip()) >= 30:
+            text = stdlib_text
+            metadata["method"] = "stdlib_pdf_text"
     if len(text.strip()) < 50:
         metadata["method"] = "ocr"
+        metadata["attempts"].append("ocr")
         text = ocr_pdf(path, run_dir)
     pages = text.split("\f") if "\f" in text else [text]
     segments: list[Segment] = []
@@ -622,6 +687,60 @@ def extract_pdf(path: Path, run_dir: Path) -> tuple[list[Segment], dict[str, Any
     if not segments:
         raise KaodaError(f"No text could be extracted from PDF: {path}")
     return segments, metadata
+
+
+def decode_pdf_literal(raw: bytes) -> str:
+    out = bytearray()
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if char != 0x5C:
+            out.append(char)
+            index += 1
+            continue
+        index += 1
+        if index >= len(raw):
+            break
+        escaped = raw[index]
+        index += 1
+        if escaped in b"nrtbf":
+            out.append({ord("n"): 10, ord("r"): 13, ord("t"): 9, ord("b"): 8, ord("f"): 12}[escaped])
+        elif escaped in b"()\\":
+            out.append(escaped)
+        elif 48 <= escaped <= 55:
+            octal = bytes([escaped])
+            for _ in range(2):
+                if index < len(raw) and 48 <= raw[index] <= 55:
+                    octal += bytes([raw[index]])
+                    index += 1
+            out.append(int(octal, 8) & 0xFF)
+        elif escaped in {10, 13}:
+            if escaped == 13 and index < len(raw) and raw[index] == 10:
+                index += 1
+        else:
+            out.append(escaped)
+    try:
+        return out.decode("utf-8")
+    except UnicodeDecodeError:
+        return out.decode("latin-1", errors="replace")
+
+
+def extract_pdf_text_stdlib(path: Path) -> str:
+    raw = path.read_bytes()
+    pieces: list[str] = []
+    for match in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", raw, re.S):
+        stream = match.group(1).strip(b"\r\n")
+        header = raw[max(0, match.start() - 600) : match.start()]
+        if b"/FlateDecode" in header:
+            try:
+                stream = zlib.decompress(stream)
+            except zlib.error:
+                continue
+        for literal in re.finditer(rb"\((?:\\.|[^\\()])*\)", stream):
+            value = decode_pdf_literal(literal.group(0)[1:-1]).strip()
+            if value:
+                pieces.append(value)
+    return clean_learning_text(" ".join(pieces))
 
 
 def ocr_pdf(path: Path, run_dir: Path) -> str:
@@ -655,9 +774,17 @@ class ArticleParser(HTMLParser):
         self.meta: dict[str, str] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
         attrs_dict = {k.lower(): (v or "") for k, v in attrs}
-        if tag in {"script", "style", "noscript", "svg"}:
+        attr_text = " ".join(
+            attrs_dict.get(name, "") for name in ["id", "class", "role", "aria-label", "data-testid"]
+        )
+        if self.skip_stack:
             self.skip_stack.append(tag)
+            return
+        if tag in ARTICLE_SKIP_TAGS or ARTICLE_JUNK_ATTR_PATTERN.search(attr_text):
+            self.skip_stack.append(tag)
+            return
         if tag == "title":
             self.in_title = True
         if tag == "meta":
@@ -667,8 +794,12 @@ class ArticleParser(HTMLParser):
                 self.meta[name] = content
 
     def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
         if self.skip_stack and self.skip_stack[-1] == tag:
             self.skip_stack.pop()
+            return
+        if self.skip_stack:
+            return
         if tag == "title":
             self.in_title = False
         if tag in {"p", "div", "section", "article", "br", "li", "h1", "h2", "h3"}:
@@ -699,6 +830,8 @@ def extract_article(url: str) -> tuple[list[Segment], dict[str, Any]]:
     parser.feed(document)
     body = clean_learning_text("\n".join(parser.body_parts))
     title = clean_learning_text(" ".join(parser.title_parts)) or parser.meta.get("og:title") or url
+    if len(body) < 80:
+        raise KaodaError("Article text is too thin after cleanup. Paste the article正文 or provide a readable copy.")
     source_id = f"article-{stable_slug(url, 8)}"
     segments = make_segments_from_text(body, source_id, locator_base={"url": url})
     metadata = {
@@ -709,6 +842,90 @@ def extract_article(url: str) -> tuple[list[Segment], dict[str, Any]]:
         "published_time": parser.meta.get("article:published_time") or parser.meta.get("date"),
     }
     return segments, metadata
+
+
+def manual_input_kind(input_type: str) -> str:
+    if input_type in {"video_url", "audio_file", "video_file"}:
+        return "transcript"
+    if input_type == "article_url":
+        return "article_text"
+    return "source_text"
+
+
+def write_text_needed_workspace(run_dir: Path, source: dict[str, Any], reason: str) -> dict[str, Any]:
+    kind = manual_input_kind(str(source.get("input_type", "")))
+    filename = "manual_transcript.txt" if kind == "transcript" else "manual_input.txt"
+    manual_path = run_dir / filename
+    prompt_path = run_dir / "manual_text_request.md"
+    source_status = {
+        "version": "1.0",
+        "run_id": source["run_id"],
+        "status": "needs_text",
+        "reason": reason,
+        "manual_input_kind": kind,
+        "manual_input_path": str(manual_path),
+        "next_command": f"python scripts/kaoda.py ingest-manual {source['run_id']}",
+    }
+    source.update(
+        {
+            "status": "needs_text",
+            "extraction_error": reason,
+            "manual_input_kind": kind,
+            "manual_input_path": str(manual_path),
+        }
+    )
+    if not manual_path.exists():
+        if kind == "transcript":
+            label = "请把视频/音频的字幕、转写稿或课程文字稿粘贴到这里。"
+        elif kind == "article_text":
+            label = "请把文章标题、作者/日期（如有）和正文粘贴到这里。"
+        else:
+            label = "请把资料中可用于学习复盘的正文粘贴到这里。"
+        manual_path.write_text(
+            "\n".join(
+                [
+                    label,
+                    "保留页码、时间戳或小标题更好；没有也可以直接粘贴正文。",
+                    "",
+                    "KAODA_REPLACE_THIS_TEXT",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    prompt_path.write_text(
+        "\n".join(
+            [
+                "# 需要补充可读文本",
+                "",
+                f"- run_id: {source['run_id']}",
+                f"- input_type: {source.get('input_type')}",
+                f"- input: {source.get('input')}",
+                f"- reason: {reason}",
+                "",
+                "下一步：",
+                f"1. 把可读正文/字幕粘贴到 `{manual_path.name}`。",
+                f"2. 运行 `python scripts/kaoda.py ingest-manual {source['run_id']}`。",
+                "3. 继续 deep research -> plan-exam -> build-exam。",
+                "",
+                "不要根据标题、URL 或文件名直接编题。",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    write_json(run_dir / "source.json", source)
+    write_json(run_dir / "source_status.json", source_status)
+    print_path(
+        run_dir / "source_status.json",
+        {
+            "run_id": source["run_id"],
+            "status": "needs_text",
+            "manual_input": str(manual_path),
+            "next": source_status["next_command"],
+        },
+    )
+    return {"run_id": source["run_id"], "run_dir": str(run_dir), "status": "needs_text"}
 
 
 def ingest(args: argparse.Namespace) -> dict[str, Any]:
@@ -723,24 +940,31 @@ def ingest(args: argparse.Namespace) -> dict[str, Any]:
         "created_at": iso_now(),
     }
 
-    if input_type == "video_url":
-        segments, metadata = extract_video_subtitles(input_value, run_dir)
-    elif input_type == "article_url":
-        segments, metadata = extract_article(input_value)
-    elif input_type == "pdf":
-        segments, metadata = extract_pdf(Path(input_value).expanduser().resolve(), run_dir)
-    elif input_type == "subtitle":
-        path = Path(input_value).expanduser().resolve()
-        segments = parse_subtitle(path, f"subtitle-{stable_slug(str(path), 8)}")
-        metadata = {"method": "subtitle parser", "path": str(path)}
-    elif input_type == "text_file":
-        path = Path(input_value).expanduser().resolve()
-        text = path.read_text(encoding="utf-8", errors="replace")
-        segments = make_segments_from_text(text, f"text-{stable_slug(str(path), 8)}", {"path": str(path)})
-        metadata = {"method": "text file", "path": str(path)}
-    else:
-        segments = make_segments_from_text(input_value, f"inline-{stable_slug(input_value, 8)}", {"input": "inline"})
-        metadata = {"method": "inline text"}
+    try:
+        if input_type == "video_url":
+            segments, metadata = extract_video_subtitles(input_value, run_dir)
+        elif input_type == "article_url":
+            segments, metadata = extract_article(input_value)
+        elif input_type == "pdf":
+            segments, metadata = extract_pdf(Path(input_value).expanduser().resolve(), run_dir)
+        elif input_type in {"audio_file", "video_file"}:
+            segments, metadata = extract_media_file_transcript(Path(input_value).expanduser().resolve(), run_dir)
+        elif input_type == "subtitle":
+            path = Path(input_value).expanduser().resolve()
+            segments = parse_subtitle(path, f"subtitle-{stable_slug(str(path), 8)}")
+            metadata = {"method": "subtitle parser", "path": str(path)}
+        elif input_type == "text_file":
+            path = Path(input_value).expanduser().resolve()
+            text = path.read_text(encoding="utf-8", errors="replace")
+            segments = make_segments_from_text(text, f"text-{stable_slug(str(path), 8)}", {"path": str(path)})
+            metadata = {"method": "text file", "path": str(path)}
+        else:
+            segments = make_segments_from_text(input_value, f"inline-{stable_slug(input_value, 8)}", {"input": "inline"})
+            metadata = {"method": "inline text"}
+    except KaodaError as exc:
+        if input_type in {"video_url", "article_url", "pdf", "audio_file", "video_file"}:
+            return write_text_needed_workspace(run_dir, source, str(exc))
+        raise
 
     source.update(metadata)
     write_json(run_dir / "source.json", source)
@@ -750,6 +974,61 @@ def ingest(args: argparse.Namespace) -> dict[str, Any]:
     write_json(run_dir / "material_report.json", report)
     print_path(run_dir / "segments.jsonl", {"run_id": run_id, "segments": len(rows)})
     return {"run_id": run_id, "run_dir": str(run_dir)}
+
+
+def ingest_manual(args: argparse.Namespace) -> dict[str, Any]:
+    run_id = args.run_id
+    run_dir = ensure_dir(data_dir() / "runs" / run_id)
+    source_path = run_dir / "source.json"
+    if not source_path.exists():
+        raise KaodaError(f"source.json missing for {run_id}. Run ingest first.")
+    source = read_json(source_path)
+    manual_path = Path(args.text_file).expanduser().resolve() if args.text_file else None
+    if manual_path is None:
+        stored = source.get("manual_input_path")
+        candidates = [
+            Path(stored).expanduser() if stored else None,
+            run_dir / "manual_transcript.txt",
+            run_dir / "manual_input.txt",
+        ]
+        manual_path = next((candidate for candidate in candidates if candidate and candidate.exists()), None)
+    if manual_path is None or not manual_path.exists():
+        raise KaodaError(f"Manual text file missing for {run_id}. Fill manual_input.txt or manual_transcript.txt first.")
+    text = manual_path.read_text(encoding="utf-8", errors="replace")
+    if "KAODA_REPLACE_THIS_TEXT" in text or len(clean_learning_text(text)) < 40:
+        raise KaodaError("Manual text is still empty or too thin. Paste the real transcript/article/source text first.")
+    original_type = str(source.get("input_type", "manual"))
+    source_id = f"manual-{stable_slug(run_id + str(manual_path), 8)}"
+    locator_base = {
+        "manual_input": str(manual_path),
+        "original_input": source.get("input"),
+        "original_input_type": original_type,
+    }
+    if original_type == "article_url" and is_url(str(source.get("input", ""))):
+        locator_base["url"] = source.get("input")
+    segments = make_segments_from_text(text, source_id, locator_base=locator_base)
+    rows = [segment.as_dict() for segment in segments]
+    source.update(
+        {
+            "status": "ready",
+            "method": "manual text fallback",
+            "manual_text_path": str(manual_path),
+            "manual_ingested_at": iso_now(),
+        }
+    )
+    write_json(source_path, source)
+    write_jsonl(run_dir / "segments.jsonl", rows)
+    report = build_material_report(run_id, source, rows)
+    write_json(run_dir / "material_report.json", report)
+    status_path = run_dir / "source_status.json"
+    if status_path.exists():
+        status = read_json(status_path)
+        status["status"] = "ready"
+        status["segments"] = len(rows)
+        status["manual_text_path"] = str(manual_path)
+        write_json(status_path, status)
+    print_path(run_dir / "segments.jsonl", {"run_id": run_id, "segments": len(rows), "source": "manual_text"})
+    return {"run_id": run_id, "run_dir": str(run_dir), "segments": len(rows)}
 
 
 def write_topic_research_prompt(run_dir: Path, topic: str) -> None:
@@ -2104,6 +2383,7 @@ def write_grading_prompt(exam: dict[str, Any], path: Path) -> None:
 - 不要因为答案长就给高分。
 - 不要把复述材料当作真正理解。
 - 每道开放题必须输出 level、evidence、deduction_reason、mistake_tag、improvement。
+- 开放题复核完成后，必须把对应 result 的 `score_status` 改为 `completed` 或移除该字段；不能保留 `pending_agent_review`。
 - 每道错题必须输出 learn_from，说明回到哪个知识点、片段或来源复习。
 - 输出总分、客观题得分、开放题得分、百分比和优先复习建议。
 - 如果存在开放题，复核完成后把 `grade.json.open_review.status` 改为 `completed`；未完成复核时不要运行 record。
@@ -2155,6 +2435,7 @@ def write_agent_open_review(exam: dict[str, Any], attempt: dict[str, Any], path:
         "# Agent 开放题复核任务",
         "",
         "请读取同目录 `grade.json`，只复核简答/口述题。完成后把 `open_review.status` 改为 `completed`，并补齐每道开放题的证据、扣分原因、rubric level、错因标签和改进建议。",
+        "每道开放题 result 还必须把 `score_status` 改为 `completed` 或移除；不要保留本地预检的 `pending_agent_review`。",
         "",
         "复核时不要按字数给分；先找答案证据，再按 rubric 给分。",
         "",
@@ -2242,7 +2523,6 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
     objective_total = 0
     objective_score = 0
     open_total = 0
-    open_score = 0
     for question in exam.get("questions", []):
         qid = question["id"]
         user_answer = answers.get(qid, [] if question["type"] != "open" else "")
@@ -2273,29 +2553,32 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
             max_score = int(question.get("rubric", {}).get("max_score", 4))
             open_total += max_score
             level, evidence, reason = heuristic_open_level(str(user_answer), question)
-            open_score += level
             question_results.append(
                 {
                     "question_id": qid,
                     "type": "open",
-                    "score": level,
+                    "score": 0,
                     "max_score": max_score,
-                    "rubric_level": level,
+                    "score_status": "pending_agent_review",
+                    "rubric_level": None,
                     "evidence": evidence,
-                    "deduction_reason": reason,
-                    "mistake_tag": pick_mistake_tag(question, user_answer=str(user_answer), level=level),
+                    "deduction_reason": "开放题未做最终评分；本地只做预检提示，必须由 Agent 按 rubric 复核。",
+                    "mistake_tag": "",
                     "improvement": "补充机制、边界、反例和真实应用步骤；不要只复述材料原话。",
                     "learn_from": learning_target(question),
                     "needs_agent_review": True,
+                    "pregrade_hint": {
+                        "suggested_rubric_level": level,
+                        "suggested_mistake_tag": pick_mistake_tag(question, user_answer=str(user_answer), level=level),
+                        "reason": reason,
+                    },
                 }
             )
-    total = objective_score + open_score
-    max_total = objective_total + open_total
     needs_agent_review = open_total > 0
     open_review = {
         "status": "pending_agent_review" if needs_agent_review else "not_required",
         "open_question_count": sum(1 for question in exam.get("questions", []) if question.get("type") == "open"),
-        "policy": "objective questions are final; open answers require agent rubric review before record"
+        "policy": "objective questions are final; open answers are not scored locally and require agent rubric review before record"
         if needs_agent_review
         else "no open answers in this exam",
     }
@@ -2305,17 +2588,24 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
         "learner_id": learner_id,
         "exam_id": exam.get("exam_id"),
         "run_id": exam.get("run_id"),
-        "scoring_mode": "local objective scoring" if not needs_agent_review else "local objective scoring + heuristic open pre-grade; agent review recommended",
+        "scoring_mode": "local objective scoring"
+        if not needs_agent_review
+        else "local objective scoring + open-answer precheck only; agent rubric review required",
         "needs_agent_review": needs_agent_review,
         "open_review": open_review,
         "score": {
             "objective": objective_score,
             "objective_total": objective_total,
-            "open": open_score,
+            "objective_percent": round((objective_score / objective_total * 100) if objective_total else 0, 1),
+            "open": None if needs_agent_review else 0,
             "open_total": open_total,
-            "total": total,
-            "max_total": max_total,
-            "percent": round((total / max_total * 100) if max_total else 0, 1),
+            "open_pending_total": open_total if needs_agent_review else 0,
+            "total": objective_score,
+            "max_total": objective_total,
+            "percent": round((objective_score / objective_total * 100) if objective_total else 0, 1),
+            "final_total": None if needs_agent_review else objective_score,
+            "final_max_total": None if needs_agent_review else objective_total,
+            "final_percent": None if needs_agent_review else round((objective_score / objective_total * 100) if objective_total else 0, 1),
         },
         "question_results": question_results,
         "wrong_reason_profile": summarize_wrong_reasons(question_results),
@@ -2389,6 +2679,8 @@ def pick_mistake_tag(question: dict[str, Any], user_answer: str = "", level: int
 def summarize_wrong_reasons(results: list[dict[str, Any]]) -> dict[str, int]:
     counter: Counter[str] = Counter()
     for row in results:
+        if row.get("score_status") == "pending_agent_review":
+            continue
         if row.get("score", 0) < row.get("max_score", 1):
             tag = row.get("mistake_tag") or "unknown"
             counter[tag] += 1
@@ -2422,6 +2714,18 @@ def record(args: argparse.Namespace) -> dict[str, Any]:
         )
     if open_status and open_status not in {"not_required", "completed"}:
         raise KaodaError(f"Unsupported open_review.status for record: {open_status}")
+    if open_status == "completed":
+        pending_open = [
+            result.get("question_id")
+            for result in grade_payload.get("question_results", [])
+            if result.get("type") == "open" and result.get("score_status") == "pending_agent_review"
+        ]
+        if pending_open:
+            raise KaodaError(
+                "open_review.status is completed, but open question results are still pending Agent review: "
+                + ", ".join(str(item) for item in pending_open)
+            )
+    ensure_grade_score_totals_match_results(grade_payload)
     exam_path = grade_path.parent / "exam.json"
     exam = read_json(exam_path) if exam_path.exists() else {"questions": []}
     q_by_id = {q["id"]: q for q in exam.get("questions", [])}
@@ -2445,6 +2749,26 @@ def record(args: argparse.Namespace) -> dict[str, Any]:
         },
     )
     return {"added": len(entries), "bank_path": str(bank_path), "archive_dir": str(archive_dir)}
+
+
+def ensure_grade_score_totals_match_results(grade_payload: dict[str, Any]) -> None:
+    results = grade_payload.get("question_results", [])
+    if not results:
+        return
+    expected_total = 0
+    expected_max = 0
+    for result in results:
+        score = result.get("score", 0)
+        max_score = result.get("max_score", 0)
+        if not isinstance(score, (int, float)) or not isinstance(max_score, (int, float)):
+            raise KaodaError("grade.json question_results contain non-numeric score/max_score.")
+        expected_total += score
+        expected_max += max_score
+    score_payload = grade_payload.get("score") or {}
+    if score_payload.get("total") != expected_total or score_payload.get("max_total") != expected_max:
+        raise KaodaError(
+            "grade.json score totals do not match question_results. Recalculate score.total and score.max_total before record."
+        )
 
 
 def archive_grade_session(
@@ -3481,6 +3805,9 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
         "pdftotext": "text PDF extraction with page locators",
         "pdftoppm": "scanned PDF OCR image rendering",
         "tesseract": "scanned PDF OCR text recognition",
+        "ffmpeg": "optional local audio/video conversion before transcription",
+        "whisper": "optional local media transcription when installed with a model",
+        "whisper-cli": "optional whisper.cpp media transcription when a local model is configured",
     }
     for command, purpose in optional_tools.items():
         path = shutil.which(command)
@@ -3497,8 +3824,9 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
             "You can ask: 用 kaoda-review 拷打式复盘这个视频/PDF/主题，正常模式，混合风格。"
         ),
         "optional_dependency_notes": {
-            "video_links": "Install yt-dlp or provide SRT/VTT/TXT transcripts when video subtitles cannot be extracted.",
-            "pdf": "Install pdftotext for text PDFs. Scanned PDFs need pdftoppm and tesseract, or provide extracted text.",
+            "video_links": "Install yt-dlp or provide SRT/VTT/TXT transcripts when video subtitles cannot be extracted. The CLI creates a manual transcript workspace instead of inventing content.",
+            "media_files": "Audio/video uploads work best with a same-name SRT/VTT/TXT/MD transcript. Optional local Whisper/ffmpeg can be used outside the core path.",
+            "pdf": "Text PDFs use pdftotext when available and a small stdlib fallback otherwise. Scanned PDFs need pdftoppm+tesseract, or the CLI creates a manual text workspace.",
         },
         "missing_required": missing_required,
         "missing_optional": missing_optional,
@@ -3522,9 +3850,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("ingest", help="识别输入并生成 segments.jsonl")
-    p.add_argument("input", help="YouTube/Bilibili URL, article URL, PDF, subtitle, text file, or inline text")
+    p.add_argument("input", help="YouTube/Bilibili URL, article URL, PDF, subtitle, text/audio/video file, or inline text")
     p.add_argument("--run-id", help="Optional stable run id")
     p.set_defaults(func=ingest)
+
+    p = sub.add_parser("ingest-manual", help="把补充的正文/字幕导入已有 needs_text run")
+    p.add_argument("run_id")
+    p.add_argument("text_file", nargs="?", default=None, help="默认读取 run 目录下的 manual_input.txt/manual_transcript.txt")
+    p.set_defaults(func=ingest_manual)
 
     p = sub.add_parser("research-topic", help="为只有主题、没有材料的请求创建研究工作区")
     p.add_argument("topic", help="例如 token、RAG、注意力机制")

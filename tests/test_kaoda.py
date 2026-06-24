@@ -361,9 +361,40 @@ class KaodaFlowTests(unittest.TestCase):
         self.assertEqual(kaoda.main(["grade-report", str(report_path), "--learner-id", "reporter"]), 0)
         grade = json.loads((run_dir / "grade.json").read_text(encoding="utf-8"))
         self.assertEqual(grade["open_review"]["status"], "pending_agent_review")
+        self.assertIsNone(grade["score"]["open"])
+        self.assertEqual(grade["score"]["total"], grade["score"]["objective"])
+        self.assertEqual(grade["score"]["max_total"], grade["score"]["objective_total"])
+        open_results = [row for row in grade["question_results"] if row["type"] == "open"]
+        self.assertTrue(open_results)
+        self.assertTrue(all(row["score_status"] == "pending_agent_review" for row in open_results))
+        self.assertTrue(all(row.get("pregrade_hint") for row in open_results))
         self.assertTrue((run_dir / "agent_open_review.md").exists())
         self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 2)
         grade["open_review"]["status"] = "completed"
+        (run_dir / "grade.json").write_text(json.dumps(grade, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 2)
+        open_score = 0
+        open_total = 0
+        for result in grade["question_results"]:
+            if result["type"] != "open":
+                continue
+            result["score_status"] = "completed"
+            result["score"] = 2
+            result["rubric_level"] = 2
+            result["mistake_tag"] = "boundary_blindness"
+            result["deduction_reason"] = "能解释一部分，但边界和反例不足。"
+            open_score += result["score"]
+            open_total += result["max_score"]
+        (run_dir / "grade.json").write_text(json.dumps(grade, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 2)
+        grade["score"]["open"] = open_score
+        grade["score"]["open_total"] = open_total
+        grade["score"]["total"] = grade["score"]["objective"] + open_score
+        grade["score"]["max_total"] = grade["score"]["objective_total"] + open_total
+        grade["score"]["percent"] = round(grade["score"]["total"] / grade["score"]["max_total"] * 100, 1)
+        grade["score"]["final_total"] = grade["score"]["total"]
+        grade["score"]["final_max_total"] = grade["score"]["max_total"]
+        grade["score"]["final_percent"] = grade["score"]["percent"]
         (run_dir / "grade.json").write_text(json.dumps(grade, ensure_ascii=False, indent=2), encoding="utf-8")
         self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 0)
 
@@ -407,6 +438,7 @@ class KaodaFlowTests(unittest.TestCase):
         rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(rows)
         self.assertIn("url", rows[0]["locator"])
+        self.assertNotIn("广告和导航", "\n".join(row["text"] for row in rows))
 
     def test_video_subtitle_ingest_uses_ytdlp_stub(self):
         bin_dir = Path(self.tmp.name) / "bin"
@@ -434,6 +466,47 @@ path.write_text("WEBVTT\\n\\n00:00:01.000 --> 00:00:04.000\\nToken 是模型处�
         self.assertEqual(len(rows), 2)
         self.assertIn("timestamp", rows[0]["locator"])
 
+    def test_video_url_without_ytdlp_creates_manual_transcript_workspace(self):
+        old_command_exists = kaoda.command_exists
+        kaoda.command_exists = lambda name: False if name == "yt-dlp" else old_command_exists(name)
+        try:
+            self.assertEqual(
+                kaoda.main(["ingest", "https://www.youtube.com/watch?v=needs-text", "--run-id", "video-needs-text"]),
+                0,
+            )
+        finally:
+            kaoda.command_exists = old_command_exists
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "video-needs-text"
+        status = json.loads((run_dir / "source_status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["status"], "needs_text")
+        self.assertTrue((run_dir / "manual_transcript.txt").exists())
+        self.assertFalse((run_dir / "segments.jsonl").exists())
+        (run_dir / "manual_transcript.txt").write_text(
+            "Token 是模型处理文字的基本单位。边界是 token 不等同于完整词语，迁移时要检查上下文窗口。",
+            encoding="utf-8",
+        )
+        self.assertEqual(kaoda.main(["ingest-manual", "video-needs-text"]), 0)
+        rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["locator"]["original_input_type"], "video_url")
+
+    def test_media_file_ingest_uses_sidecar_transcript(self):
+        media_path = Path(self.tmp.name) / "lesson.mp4"
+        media_path.write_bytes(b"not a real video but enough for path detection")
+        sidecar = media_path.with_suffix(".vtt")
+        sidecar.write_text(
+            "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nToken 是模型处理文字的基本单位。\n\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(kaoda.main(["ingest", str(media_path), "--run-id", "media-demo"]), 0)
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "media-demo"
+        source = json.loads((run_dir / "source.json").read_text(encoding="utf-8"))
+        self.assertEqual(source["input_type"], "video_file")
+        self.assertEqual(source["method"], "media sidecar transcript")
+        rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("timestamp", rows[0]["locator"])
+
     def test_pdf_ingest_preserves_page_locator_when_pdftotext_exists(self):
         if not kaoda.command_exists("pdftotext"):
             self.skipTest("pdftotext is not installed")
@@ -441,6 +514,22 @@ path.write_text("WEBVTT\\n\\n00:00:01.000 --> 00:00:04.000\\nToken 是模型处�
         self.write_minimal_pdf(pdf_path, "Token is model text unit. Boundary is not same as word.")
         self.assertEqual(kaoda.main(["ingest", str(pdf_path), "--run-id", "pdf-demo"]), 0)
         run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "pdf-demo"
+        rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["locator"].get("page"), 1)
+
+    def test_pdf_ingest_uses_stdlib_fallback_without_pdftotext(self):
+        pdf_path = Path(self.tmp.name) / "stdlib-token.pdf"
+        self.write_minimal_pdf(pdf_path, "Token is the model text unit. Boundary is not the same as a word or character.")
+        old_command_exists = kaoda.command_exists
+        kaoda.command_exists = lambda name: False if name in {"pdftotext", "pdftoppm", "tesseract"} else old_command_exists(name)
+        try:
+            self.assertEqual(kaoda.main(["ingest", str(pdf_path), "--run-id", "pdf-stdlib"]), 0)
+        finally:
+            kaoda.command_exists = old_command_exists
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "pdf-stdlib"
+        source = json.loads((run_dir / "source.json").read_text(encoding="utf-8"))
+        self.assertEqual(source["method"], "stdlib_pdf_text")
         rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(rows)
         self.assertEqual(rows[0]["locator"].get("page"), 1)

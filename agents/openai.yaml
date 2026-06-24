@@ -1,7 +1,7 @@
 interface:
   display_name: "拷打式复盘"
-  short_description: "研究先行，把资料变成拷问式复盘、错题和周考"
+  short_description: "研究先行，把资料/音视频稿变成复盘、错题和周考"
   brand_color: "#BB3E1D"
-  default_prompt: "Use $kaoda-review to turn this video, PDF, article, subtitle, note, or topic into a research-backed interactive review. First ingest and deepen the material, then ask only mode/style choices, generate the HTML review, and after I export the Agent report, grade and record mistakes."
+  default_prompt: "Use $kaoda-review to turn this video, audio/video transcript, PDF, article, subtitle, note, or topic into a research-backed interactive review. First ingest the material; if extraction needs text, guide me through manual_input/manual_transcript and ingest-manual. Then deepen the material, ask only mode/style choices, generate the HTML review, and after I export the Agent report, grade objective items locally and send open answers through Agent rubric review before recording mistakes."
 policy:
   allow_implicit_invocation: true
