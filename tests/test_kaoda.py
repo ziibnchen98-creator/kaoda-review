@@ -666,6 +666,14 @@ path.write_text("WEBVTT\\n\\n00:00:01.000 --> 00:00:04.000\\nToken 是模型处�
         self.assertIn("暂无错题", mistakes)
         self.assertIn("暂无错题笔记", notes)
 
+    def test_doctor_and_openai_metadata_are_beginner_ready(self):
+        self.assertEqual(kaoda.main(["doctor"]), 0)
+        metadata = (ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        self.assertIn("研究先行", metadata)
+        self.assertIn("错题", metadata)
+        self.assertIn("周考", metadata)
+        self.assertIn("Agent report", metadata)
+
 
 if __name__ == "__main__":
     unittest.main()

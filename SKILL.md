@@ -72,6 +72,8 @@ Questions must read like a clear review sheet, not like an agent exposing its pr
 
 Read `references/source_ingestion.md` before processing videos, PDFs, article URLs, scanned documents, or subtitles.
 
+If the user is new, or video/PDF extraction fails, run `python scripts/kaoda.py doctor` and explain the result in plain language before asking them to install tools or provide transcripts.
+
 Hard rules:
 
 - Preserve source provenance: page, timestamp, URL, or segment id.

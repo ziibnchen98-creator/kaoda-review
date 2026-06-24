@@ -3449,6 +3449,66 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+def doctor(args: argparse.Namespace) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    def add(name: str, ok: bool, detail: str, required: bool = False) -> None:
+        checks.append({"name": name, "ok": ok, "required": required, "detail": detail})
+
+    add("python", sys.version_info >= (3, 10), sys.version.split()[0], required=True)
+    add("skill_root", (ROOT / "SKILL.md").exists(), str(ROOT), required=True)
+    add("html_template", TEMPLATE_PATH.exists(), str(TEMPLATE_PATH), required=True)
+    try:
+        ensure_dir(data_dir())
+        add("data_dir", os.access(data_dir(), os.W_OK), str(data_dir()), required=True)
+    except OSError as exc:
+        add("data_dir", False, str(exc), required=True)
+
+    codex_skill = Path.home() / ".codex" / "skills" / "kaoda-review"
+    if codex_skill.exists():
+        try:
+            active_ok = codex_skill.resolve() == ROOT
+            detail = f"{codex_skill} -> {codex_skill.resolve()}"
+        except OSError as exc:
+            active_ok = False
+            detail = str(exc)
+        add("codex_active_skill", active_ok, detail, required=False)
+    else:
+        add("codex_active_skill", False, f"{codex_skill} not found", required=False)
+
+    optional_tools = {
+        "yt-dlp": "video subtitle extraction for YouTube/Bilibili links",
+        "pdftotext": "text PDF extraction with page locators",
+        "pdftoppm": "scanned PDF OCR image rendering",
+        "tesseract": "scanned PDF OCR text recognition",
+    }
+    for command, purpose in optional_tools.items():
+        path = shutil.which(command)
+        add(command, bool(path), f"{purpose}; {'found at ' + path if path else 'not installed'}", required=False)
+
+    missing_required = [row["name"] for row in checks if row["required"] and not row["ok"]]
+    missing_optional = [row["name"] for row in checks if not row["required"] and not row["ok"]]
+    result = {
+        "ok": not missing_required,
+        "root": str(ROOT),
+        "data_dir": str(data_dir()),
+        "checks": checks,
+        "beginner_hint": (
+            "You can ask: 用 kaoda-review 拷打式复盘这个视频/PDF/主题，正常模式，混合风格。"
+        ),
+        "optional_dependency_notes": {
+            "video_links": "Install yt-dlp or provide SRT/VTT/TXT transcripts when video subtitles cannot be extracted.",
+            "pdf": "Install pdftotext for text PDFs. Scanned PDFs need pdftoppm and tesseract, or provide extracted text.",
+        },
+        "missing_required": missing_required,
+        "missing_optional": missing_optional,
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if missing_required:
+        raise KaodaError("Required checks failed: " + ", ".join(missing_required))
+    return result
+
+
 def print_path(path: Path, extra: dict[str, Any] | None = None) -> None:
     payload = {"path": str(path.resolve())}
     if extra:
@@ -3537,6 +3597,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("validate", help="验证 exam.json 或 grade.json")
     p.add_argument("target")
     p.set_defaults(func=validate)
+
+    p = sub.add_parser("doctor", help="检查本机运行环境、Codex skill 安装态和可选依赖")
+    p.set_defaults(func=doctor)
     return parser
 
 

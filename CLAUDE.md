@@ -2,6 +2,8 @@
 
 `kaoda-review` is runtime-neutral. Treat `SKILL.md` as the canonical workflow and use `scripts/kaoda.py` for deterministic file generation.
 
+Run `python scripts/kaoda.py doctor` after installation, for beginners, or when video/PDF/OCR extraction fails. Explain the result simply and use transcript/text fallback when optional tools are missing.
+
 When scoring browser exports, run `grade-report <kaoda_agent_report.md>` first. If open answers are present, read `agent_open_review.md`, `grading_prompt.md`, `exam.json`, and `attempt.json`, then update `grade.json` with evidence-grounded rubric judgments and set `open_review.status` to `completed`.
 
 If the learner gives only a topic, run `research-topic`, research the topic, write `topic_research.md` and `source_links.json`, then run `ingest-topic` before `plan-exam`.

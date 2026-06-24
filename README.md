@@ -60,6 +60,24 @@ git clone https://github.com/ziibnchen98-creator/kaoda-review.git ~/.claude/skil
 把这份 PDF 做成拷打式复盘，重点检查我能不能迁移应用。
 ```
 
+### 0 基础怎么用
+
+你不需要理解 `exam_brief.json`、`deep_research.json` 或 `grade.json`。正常使用时，只要把材料或主题交给 Agent：
+
+```text
+用 kaoda-review 拷打式复盘这个资料。你先研究，再问我模式和风格，最后给我一个可以答题的 HTML。
+```
+
+Agent 应该替你完成：提取文本、研究核心概念、生成考卷、等你答完后读取导出的 `kaoda_agent_report.md`、评分、记录错题、刷新看板。
+
+第一次使用或视频/PDF 提取失败时，可以让 Agent 先自检：
+
+```bash
+python3 scripts/kaoda.py doctor
+```
+
+它会告诉你本机是否有 `yt-dlp`、`pdftotext`、OCR 工具，以及 Codex 是否正在调用当前最新版 skill。
+
 ---
 
 ## 它适合谁
@@ -95,6 +113,7 @@ git clone https://github.com/ziibnchen98-creator/kaoda-review.git ~/.claude/skil
 | 变体复习 | `review.html` | 根据错题生成不重复的复习题 |
 | 周复盘 | `weekly_exam.html` | 汇总最近 7 天错题，生成周度综合复盘 |
 | 学习看板 | `dashboard/index.html` | 静态本地看板：总分、正确率、错题、笔记和历史记录 |
+| 环境自检 | `doctor` | 检查 Codex 安装态、HTML 模板、数据目录和视频/PDF/OCR 可选依赖 |
 
 ---
 
@@ -236,6 +255,9 @@ python3 scripts/kaoda.py weekly demo-user --since 7d
 ```bash
 # 摄取已有材料
 python3 scripts/kaoda.py ingest <input> --run-id <id>
+
+# 检查本机环境和可选依赖
+python3 scripts/kaoda.py doctor
 
 # 只有主题时，先生成研究任务
 python3 scripts/kaoda.py research-topic "<topic>" --run-id <id>
