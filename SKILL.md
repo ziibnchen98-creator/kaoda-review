@@ -29,18 +29,19 @@ Default output is a low-stakes review checklist, not a formal exam. The default 
 2. If the user only gives a title or topic, run `python scripts/kaoda.py research-topic "<topic>"`, perform focused research, write `topic_research.md` and `source_links.json`, then run `python scripts/kaoda.py ingest-topic <run_id>`.
 3. Read `data/runs/<run_id>/material_report.json`.
 4. Read `references/intake_and_research.md`.
-5. Complete source analysis and mandatory core research/deepening before asking mode/style questions. Default to extended research; if the learner explicitly says "只按原文/source-only", do source-internal research only.
+5. Complete source analysis and mandatory core research/deepening before asking mode/style questions. Default to extended research; if the learner explicitly says "只按原文/source-only", do source-internal research only. Write the result to `data/runs/<run_id>/deep_research.json`.
 6. After research, ask only the lightweight choices: review mode/time, question style, and mistake-knowledge policy when the learner has active mistake history.
 7. Run `python scripts/kaoda.py plan-exam <run_id> ...` to create `review_choices.md`, `research_prompt.md`, and `exam_brief.json`.
-8. 🔴 CHECKPOINT: Do not run `build-exam` unless `exam_brief.json` contains `review_mode`, `question_style`, `review_selection.status`, and mandatory research status `completed`.
+8. 🔴 CHECKPOINT: `plan-exam` must fail unless `deep_research.json` exists and contains completed research with source refs. Do not run `build-exam` unless `exam_brief.json` contains `review_mode`, `question_style`, `review_selection.status`, and mandatory research status `completed`.
 9. For review-checkpoint design rules, read `references/question_design.md`.
 10. For open-answer grading, read `references/rubrics.md`.
 11. Run `python scripts/kaoda.py build-exam <run_id>` to create `exam.json`, `exam.html`, and `grading_prompt.md`.
 12. Let the learner complete the review in `exam.html`. The visible UI should keep the flow simple: `提交试卷`, then a report page with `导出报告给 Agent`.
-13. Read the exported `kaoda_agent_report.md`; it contains `attempt.json`, `exam.json`, objective pregrade, answers, and instructions for agent scoring/recording. Generate `grade.json`, then improve it with agent rubric judgment only when open answers are present.
-14. Run `python scripts/kaoda.py record <grade.json>` to append mistakes and archive the full exam/attempt/grade/HTML under `data/learners/<id>/archive/`.
-15. Run `python scripts/kaoda.py dashboard <id>` to refresh the static learner hub: total score board, exam collection, wrong-question board, and plain-language notes.
-16. Run `python scripts/kaoda.py review <id>` for variant review or `python scripts/kaoda.py weekly <id> --since 7d` for the weekly synthesis exam.
+13. Read the exported `kaoda_agent_report.md`; it contains `attempt.json`, `exam.json`, objective pregrade, answers, and instructions for agent scoring/recording. Run `python scripts/kaoda.py grade-report <kaoda_agent_report.md> --learner-id <id>` to generate `attempt.json`, `exam.json`, `grading_prompt.md`, and `grade.json`.
+14. If `grade.json.open_review.status` is `pending_agent_review`, use `agent_open_review.md` to rubric-score short/oral answers, then set `open_review.status` to `completed` and update open-question results before recording.
+15. Run `python scripts/kaoda.py record <grade.json>` to append mistakes and archive the full exam/attempt/grade/HTML plus source/material/deep-research files under `data/learners/<id>/archive/`. `record` refuses pending open-answer pregrades.
+16. Run `python scripts/kaoda.py dashboard <id>` to refresh the static learner hub: total score board, exam collection, wrong-question board, and plain-language notes.
+17. Run `python scripts/kaoda.py review <id>` for variant review or `python scripts/kaoda.py weekly <id> --since 7d` for the weekly synthesis exam.
 
 ## Research-First Choice Gate
 
@@ -86,6 +87,7 @@ Required files for a normal run:
 
 - `segments.jsonl`
 - `material_report.json`
+- `deep_research.json`
 - `review_choices.md`
 - `research_prompt.md`
 - `topic_research.md` and `source_links.json` when the input was a bare topic
@@ -95,6 +97,7 @@ Required files for a normal run:
 - `grading_prompt.md`
 - `kaoda_agent_report.md` after learner completes and exports the review
 - `grade.json` after scoring
+- `agent_open_review.md` when `grade.json.open_review.status` is `pending_agent_review`
 - `mistake_bank.jsonl` after recording mistakes
 - `dashboard/index.html`, `dashboard/exams.html`, `dashboard/mistakes.html`, and `dashboard/notes.html` after refreshing the learner dashboard
 - `dashboard/notes_agent_pack.md` when the learner wants an Agent to rewrite notes in a more natural personal voice
@@ -103,12 +106,14 @@ Required files for a normal run:
 
 - Do not generate a summary booklet as the final product.
 - Do not run `build-exam` before mandatory research and lightweight mode/style selection are recorded in `exam_brief.json`.
+- Do not run `plan-exam` before writing and validating `deep_research.json`.
 - Do not ask the old five-question intake bundle before research.
 - Do not claim external extension research was done in source-only mode.
 - Do not create only recall questions.
 - Do not expose internal labels or style prompts in visible question text.
 - Do not create a wall of long open-answer questions. `复盘模式` and `正常模式` should be objective-first and directly scorable in the browser; short/oral prompts belong to `拷打模式` and `深度拷打`.
 - Do not score open answers by keyword matching alone.
+- Do not record `grade.json` with `open_review.status` still set to `pending_agent_review`.
 - Do not generate questions from a bare topic before writing topic research notes and sources.
 - Do not reuse old questions for review or weekly exams.
 - Do not hide missing source evidence behind confident wording.

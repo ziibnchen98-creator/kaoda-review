@@ -3,7 +3,10 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -44,9 +47,67 @@ class KaodaFlowTests(unittest.TestCase):
             os.environ["KAODA_DATA_DIR"] = self.old_data_dir
         self.tmp.cleanup()
 
+    def write_deep_research(self, run_id, mode="extended"):
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / run_id
+        report = json.loads((run_dir / "material_report.json").read_text(encoding="utf-8"))
+        segments = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        sources = [{"title": "Reliable source", "url": "https://example.com/source", "why_used": "测试延伸研究来源"}] if mode == "extended" else []
+        payload = kaoda.build_deep_research_from_report(report, segments, sources=sources)
+        if mode == "source_only":
+            payload["research"]["mode"] = "source_only"
+            payload["research"]["items"] = [item for item in payload["research"]["items"] if item.get("origin") != "extension"]
+            for item in payload["research"]["items"]:
+                item["origin"] = "source_inferred"
+        (run_dir / "deep_research.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return payload
+
+    def agent_report_markdown(self, exam, attempt):
+        return "\n".join(
+            [
+                "# kaoda-review Agent 报告包",
+                "",
+                "## attempt.json",
+                "",
+                "```json",
+                json.dumps(attempt, ensure_ascii=False, indent=2),
+                "```",
+                "",
+                "## exam.json",
+                "",
+                "```json",
+                json.dumps(exam, ensure_ascii=False, indent=2),
+                "```",
+                "",
+            ]
+        )
+
+    def write_minimal_pdf(self, path, text):
+        stream = f"BT /F1 18 Tf 72 720 Td ({text}) Tj ET".encode("ascii")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+        ]
+        chunks = [b"%PDF-1.4\n"]
+        offsets = [0]
+        for index, obj in enumerate(objects, 1):
+            offsets.append(sum(len(chunk) for chunk in chunks))
+            chunks.append(f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n")
+        xref_offset = sum(len(chunk) for chunk in chunks)
+        chunks.append(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+        for offset in offsets[1:]:
+            chunks.append(f"{offset:010d} 00000 n \n".encode("ascii"))
+        chunks.append(
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+        )
+        path.write_bytes(b"".join(chunks))
+
     def test_full_local_flow_records_mistakes_and_generates_weekly(self):
         fixture = ROOT / "tests" / "fixtures" / "sample_text.txt"
         self.assertEqual(kaoda.main(["ingest", str(fixture), "--run-id", "demo"]), 0)
+        self.write_deep_research("demo")
         self.assertEqual(
             kaoda.main(
                 [
@@ -166,6 +227,9 @@ class KaodaFlowTests(unittest.TestCase):
         self.assertTrue((archive_dir / "exam.html").exists())
         self.assertTrue((archive_dir / "attempt.json").exists())
         self.assertTrue((archive_dir / "grade.json").exists())
+        self.assertTrue((archive_dir / "source.json").exists())
+        self.assertTrue((archive_dir / "material_report.json").exists())
+        self.assertTrue((archive_dir / "deep_research.json").exists())
 
         self.assertEqual(kaoda.main(["review", "alice", "--limit", "5"]), 0)
         self.assertEqual(kaoda.main(["weekly", "alice", "--since", "7d"]), 0)
@@ -199,6 +263,10 @@ class KaodaFlowTests(unittest.TestCase):
         weekly_paths = list(weekly_root.glob("*/weekly_exam.json"))
         self.assertTrue(weekly_paths)
         weekly_exam = json.loads(weekly_paths[0].read_text(encoding="utf-8"))
+        self.assertIn("exam_brief", weekly_exam)
+        self.assertIn("review_design", weekly_exam)
+        self.assertIn("question_sections", weekly_exam)
+        self.assertEqual(kaoda.main(["validate", str(weekly_paths[0])]), 0)
         weekly_single_answers = [
             question["answer"][0] for question in weekly_exam["questions"] if question["type"] == "single_choice"
         ]
@@ -214,6 +282,8 @@ class KaodaFlowTests(unittest.TestCase):
         self.assertEqual(kaoda.main(["build-exam", "needs-brief"]), 2)
         run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "needs-brief"
         self.assertTrue((run_dir / "intake_questions.md").exists() is False)
+        self.assertEqual(kaoda.main(["plan-exam", "needs-brief", "--source-only"]), 2)
+        self.write_deep_research("needs-brief", mode="source_only")
         self.assertEqual(kaoda.main(["plan-exam", "needs-brief", "--source-only"]), 0)
         self.assertFalse((run_dir / "intake_questions.md").exists())
         self.assertTrue((run_dir / "review_choices.md").exists())
@@ -224,6 +294,172 @@ class KaodaFlowTests(unittest.TestCase):
         self.assertEqual(exam["exam_brief"]["research"]["mode"], "source_only")
         origins = {item.get("origin") for item in exam["exam_brief"]["research"]["items"]}
         self.assertNotIn("extension", origins)
+
+    def test_deep_research_validation_rejects_bad_contracts(self):
+        fixture = ROOT / "tests" / "fixtures" / "sample_text.txt"
+        self.assertEqual(kaoda.main(["ingest", str(fixture), "--run-id", "research-gate"]), 0)
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "research-gate"
+
+        (run_dir / "deep_research.json").write_text(
+            json.dumps({"research": {"status": "completed", "mode": "extended", "items": []}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        self.assertEqual(kaoda.main(["plan-exam", "research-gate"]), 2)
+
+        payload = self.write_deep_research("research-gate", mode="extended")
+        payload["research"]["mode"] = "source_only"
+        (run_dir / "deep_research.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(kaoda.main(["plan-exam", "research-gate", "--source-only"]), 2)
+
+        self.write_deep_research("research-gate", mode="extended")
+        self.assertEqual(kaoda.main(["plan-exam", "research-gate"]), 0)
+
+    def test_grade_report_roundtrip_and_open_review_guard(self):
+        fixture = ROOT / "tests" / "fixtures" / "sample_text.txt"
+        self.assertEqual(kaoda.main(["ingest", str(fixture), "--run-id", "report-demo"]), 0)
+        self.write_deep_research("report-demo")
+        self.assertEqual(kaoda.main(["plan-exam", "report-demo", "--review-mode", "正常模式"]), 0)
+        self.assertEqual(kaoda.main(["build-exam", "report-demo"]), 0)
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "report-demo"
+        exam = json.loads((run_dir / "exam.json").read_text(encoding="utf-8"))
+        answers = {q["id"]: q["answer"][0] if q["type"] == "fill_blank" else q["answer"] for q in exam["questions"]}
+        attempt = {
+            "version": "1.0",
+            "learner_id": "reporter",
+            "exam_id": exam["exam_id"],
+            "run_id": "report-demo",
+            "exam_path": "exam.json",
+            "answers": answers,
+        }
+        report_path = run_dir / "kaoda_agent_report.md"
+        report_path.write_text(self.agent_report_markdown(exam, attempt), encoding="utf-8")
+        self.assertEqual(kaoda.main(["grade-report", str(report_path), "--learner-id", "reporter"]), 0)
+        grade = json.loads((run_dir / "grade.json").read_text(encoding="utf-8"))
+        self.assertEqual(grade["open_review"]["status"], "not_required")
+        self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 0)
+
+        self.assertEqual(kaoda.main(["plan-exam", "report-demo", "--review-mode", "拷打模式"]), 0)
+        self.assertEqual(kaoda.main(["build-exam", "report-demo"]), 0)
+        exam = json.loads((run_dir / "exam.json").read_text(encoding="utf-8"))
+        answers = {}
+        for question in exam["questions"]:
+            if question["type"] == "fill_blank":
+                answers[question["id"]] = question["answer"][0]
+            elif question["type"] == "open":
+                answers[question["id"]] = "我会先说明机制，再检查边界、风险、反例和验证步骤。"
+            else:
+                answers[question["id"]] = question["answer"]
+        attempt = {
+            "version": "1.0",
+            "learner_id": "reporter",
+            "exam_id": exam["exam_id"],
+            "run_id": "report-demo",
+            "exam_path": "exam.json",
+            "answers": answers,
+        }
+        report_path.write_text(self.agent_report_markdown(exam, attempt), encoding="utf-8")
+        self.assertEqual(kaoda.main(["grade-report", str(report_path), "--learner-id", "reporter"]), 0)
+        grade = json.loads((run_dir / "grade.json").read_text(encoding="utf-8"))
+        self.assertEqual(grade["open_review"]["status"], "pending_agent_review")
+        self.assertTrue((run_dir / "agent_open_review.md").exists())
+        self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 2)
+        grade["open_review"]["status"] = "completed"
+        (run_dir / "grade.json").write_text(json.dumps(grade, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.assertEqual(kaoda.main(["record", str(run_dir / "grade.json")]), 0)
+
+    def test_article_url_ingest_extracts_metadata(self):
+        site_dir = Path(self.tmp.name) / "site"
+        site_dir.mkdir()
+        (site_dir / "index.html").write_text(
+            """
+            <html><head>
+            <title>Token 教程</title>
+            <meta name="author" content="Kaoda Author">
+            <meta property="article:published_time" content="2026-06-20">
+            </head><body>
+            <nav>广告和导航</nav>
+            <article>
+            <h1>Token 教程</h1>
+            <p>Token 是模型处理文字的基本单位，机制上由 tokenizer 把文本切成片段。</p>
+            <p>边界是它不等同于完整词语，中文、符号和 emoji 都可能改变切分。</p>
+            <p>常见误解是把 token 当成普通英文单词，然后错误估算上下文窗口。</p>
+            </article>
+            </body></html>
+            """,
+            encoding="utf-8",
+        )
+        handler = partial(SimpleHTTPRequestHandler, directory=str(site_dir))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
+            self.assertEqual(kaoda.main(["ingest", url, "--run-id", "article-demo"]), 0)
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "article-demo"
+        source = json.loads((run_dir / "source.json").read_text(encoding="utf-8"))
+        self.assertEqual(source["input_type"], "article_url")
+        self.assertEqual(source["author"], "Kaoda Author")
+        self.assertEqual(source["published_time"], "2026-06-20")
+        rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(rows)
+        self.assertIn("url", rows[0]["locator"])
+
+    def test_video_subtitle_ingest_uses_ytdlp_stub(self):
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "yt-dlp"
+        stub.write_text(
+            """#!/usr/bin/env python3
+import pathlib, sys
+out = sys.argv[sys.argv.index("-o") + 1]
+path = pathlib.Path(out.replace("%(id)s", "mock-video").replace("%(ext)s", "vtt"))
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text("WEBVTT\\n\\n00:00:01.000 --> 00:00:04.000\\nToken 是模型处理文字的基本单位。\\n\\n00:00:05.000 --> 00:00:08.000\\n边界是 token 不等同于完整词语。\\n", encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
+        os.chmod(stub, 0o755)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{bin_dir}{os.pathsep}{old_path}"
+        try:
+            self.assertEqual(kaoda.main(["ingest", "https://www.youtube.com/watch?v=demo", "--run-id", "video-demo"]), 0)
+        finally:
+            os.environ["PATH"] = old_path
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "video-demo"
+        rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 2)
+        self.assertIn("timestamp", rows[0]["locator"])
+
+    def test_pdf_ingest_preserves_page_locator_when_pdftotext_exists(self):
+        if not kaoda.command_exists("pdftotext"):
+            self.skipTest("pdftotext is not installed")
+        pdf_path = Path(self.tmp.name) / "token.pdf"
+        self.write_minimal_pdf(pdf_path, "Token is model text unit. Boundary is not same as word.")
+        self.assertEqual(kaoda.main(["ingest", str(pdf_path), "--run-id", "pdf-demo"]), 0)
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "pdf-demo"
+        rows = [json.loads(line) for line in (run_dir / "segments.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]["locator"].get("page"), 1)
+
+    def test_long_material_scales_checkpoint_count(self):
+        fixture = Path(self.tmp.name) / "long.txt"
+        fixture.write_text(
+            "\n\n".join(
+                f"Token 机制说明 {i}：tokenizer 会切分文本，边界是不能把 token 当完整词语，误解会导致上下文估算失败，迁移时要检查场景。"
+                for i in range(180)
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(kaoda.main(["ingest", str(fixture), "--run-id", "long-demo"]), 0)
+        self.write_deep_research("long-demo")
+        self.assertEqual(kaoda.main(["plan-exam", "long-demo", "--review-mode", "正常模式"]), 0)
+        run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "long-demo"
+        brief = json.loads((run_dir / "exam_brief.json").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(brief["checkpoint_count"], 30)
 
     def test_subtitle_ingest_preserves_timestamp(self):
         fixture = ROOT / "tests" / "fixtures" / "sample.srt"
@@ -305,6 +541,7 @@ class KaodaFlowTests(unittest.TestCase):
     def test_modes_control_open_question_ratio(self):
         fixture = ROOT / "tests" / "fixtures" / "sample_text.txt"
         self.assertEqual(kaoda.main(["ingest", str(fixture), "--run-id", "mode-demo"]), 0)
+        self.write_deep_research("mode-demo")
         self.assertEqual(kaoda.main(["plan-exam", "mode-demo", "--review-mode", "拷打模式"]), 0)
         self.assertEqual(kaoda.main(["build-exam", "mode-demo"]), 0)
         run_dir = Path(os.environ["KAODA_DATA_DIR"]) / "runs" / "mode-demo"
@@ -331,6 +568,7 @@ class KaodaFlowTests(unittest.TestCase):
     def test_mistake_knowledge_choice_only_when_bank_exists(self):
         fixture = ROOT / "tests" / "fixtures" / "sample_text.txt"
         self.assertEqual(kaoda.main(["ingest", str(fixture), "--run-id", "mistake-choice"]), 0)
+        self.write_deep_research("mistake-choice")
         self.assertEqual(
             kaoda.main(
                 [
@@ -410,6 +648,7 @@ class KaodaFlowTests(unittest.TestCase):
         )
         self.assertEqual(kaoda.main(["ingest-topic", "token-demo"]), 0)
         self.assertTrue((run_dir / "segments.jsonl").exists())
+        self.assertTrue((run_dir / "deep_research.json").exists())
         source = json.loads((run_dir / "source.json").read_text(encoding="utf-8"))
         self.assertEqual(source["input_type"], "topic_research")
         report = json.loads((run_dir / "material_report.json").read_text(encoding="utf-8"))

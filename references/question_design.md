@@ -92,9 +92,11 @@ Read `exam_brief.json` and check:
 - `question_style` is present.
 - `research.status` is `completed`.
 - `research.mandatory` is `true`.
+- `research.items` came from validated `deep_research.json`.
+- Each research item has source refs and the required mechanism/boundary/misconception/counterexample/transfer fields.
 - `deepened_knowledge_map` exists.
 
-If any item is missing, stop and run `plan-exam` instead of writing questions.
+If any item is missing, stop and run or repair the research/`plan-exam` step instead of writing questions.
 
 ## Source vs Extension
 

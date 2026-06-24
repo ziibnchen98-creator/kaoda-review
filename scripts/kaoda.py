@@ -859,6 +859,11 @@ def ingest_topic(args: argparse.Namespace) -> dict[str, Any]:
     report = build_material_report(run_id, source, rows)
     report["topic_research"] = {"topic": topic, "sources": sources, "notes_path": str(notes_path)}
     write_json(run_dir / "material_report.json", report)
+    if not (run_dir / "deep_research.json").exists():
+        write_json(
+            run_dir / "deep_research.json",
+            build_deep_research_from_report(report, rows, sources=sources),
+        )
     print_path(run_dir / "segments.jsonl", {"run_id": run_id, "topic": topic, "segments": len(rows)})
     return {"run_id": run_id, "run_dir": str(run_dir)}
 
@@ -1069,6 +1074,167 @@ def build_material_report(run_id: str, source: dict[str, Any], segments: list[di
     }
 
 
+def source_refs_for_topic(topic: dict[str, Any], segments_by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for segment_id in topic.get("evidence_segment_ids", [])[:3]:
+        segment = segments_by_id.get(segment_id)
+        if not segment:
+            continue
+        ref: dict[str, Any] = {"segment_id": segment_id}
+        locator = segment.get("locator") or {}
+        if locator:
+            ref["locator"] = locator
+        excerpt = compact_excerpt(segment.get("text", ""), 140)
+        if excerpt:
+            ref["excerpt"] = excerpt
+        refs.append(ref)
+    if not refs and topic.get("evidence_excerpt"):
+        refs.append({"excerpt": topic["evidence_excerpt"]})
+    return refs
+
+
+def build_deep_research_from_report(
+    report: dict[str, Any],
+    segments: list[dict[str, Any]],
+    sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    segments_by_id = {row.get("segment_id"): row for row in segments if row.get("segment_id")}
+    source_topics = report.get("knowledge_map", {}).get("source_topics", [])[:5]
+    source_links = sources or report.get("topic_research", {}).get("sources", []) or []
+    mode = "extended" if source_links else "source_only"
+    items: list[dict[str, Any]] = []
+    for topic in source_topics:
+        name = topic.get("name") or "核心概念"
+        items.append(
+            {
+                "topic_id": topic.get("id"),
+                "topic": name,
+                "origin": "source",
+                "mechanism": topic.get("mechanism_probe") or f"说明「{name}」为什么成立。",
+                "boundary": topic.get("boundary_probe") or f"说明「{name}」何时不适用。",
+                "misconception": topic.get("misconception_trap") or f"把「{name}」当作名词背诵而不解释条件。",
+                "counterexample": f"找一个会限制或推翻「{name}」的失败案例。",
+                "transfer_scenario": topic.get("transfer_probe") or f"把「{name}」迁移到一个新任务中。",
+                "source_refs": source_refs_for_topic(topic, segments_by_id),
+            }
+        )
+    if mode == "extended":
+        first_ref = source_refs_for_topic(source_topics[0], segments_by_id) if source_topics else []
+        for index, source_link in enumerate(source_links[:3], 1):
+            title = source_link.get("title") or f"延伸来源 {index}"
+            url = source_link.get("url") or source_link.get("href") or ""
+            name = f"{title} 的延伸边界"
+            refs = [{"title": title, "url": url, "why_used": source_link.get("why_used", "")}]
+            if first_ref:
+                refs.append(first_ref[0])
+            items.append(
+                {
+                    "topic_id": f"ext-{index:02d}",
+                    "topic": name,
+                    "origin": "extension",
+                    "mechanism": f"结合外部来源说明「{title}」补充了什么机制或背景。",
+                    "boundary": "说明这条延伸信息不能替代原材料，只能用于补边界和迁移。",
+                    "misconception": "把外部资料当成原文结论，或者把单一来源当成通用规律。",
+                    "counterexample": "当外部来源和原材料场景不同，直接套用会失真。",
+                    "transfer_scenario": "用外部来源补充真实应用、风险或上下游知识，再回到材料核对。",
+                    "source_refs": refs,
+                }
+            )
+    return {
+        "version": "1.0",
+        "created_at": iso_now(),
+        "research": {
+            "status": "completed",
+            "mandatory": True,
+            "mode": mode,
+            "items": items,
+            "notes": "由已完成的主题研究笔记和来源清单整理；plan-exam 会再次校验字段和来源。",
+        },
+    }
+
+
+RESEARCH_ITEM_REQUIRED_FIELDS = [
+    "mechanism",
+    "boundary",
+    "misconception",
+    "counterexample",
+    "transfer_scenario",
+]
+
+
+def research_text_is_substantive(value: Any) -> bool:
+    return isinstance(value, str) and len(clean_learning_text(value)) >= 6
+
+
+def source_ref_has_source(ref: dict[str, Any], origin: str) -> bool:
+    if not isinstance(ref, dict):
+        return False
+    if origin == "extension":
+        return bool(ref.get("url") or ref.get("href") or ref.get("source_url"))
+    if ref.get("segment_id") or ref.get("page") or ref.get("timestamp") or ref.get("url"):
+        return True
+    locator = ref.get("locator") if isinstance(ref.get("locator"), dict) else {}
+    return bool(locator.get("page") or locator.get("timestamp") or locator.get("url") or locator.get("research_note"))
+
+
+def normalize_deep_research_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    research = payload.get("research") if isinstance(payload.get("research"), dict) else payload
+    if not isinstance(research, dict):
+        raise KaodaError("deep_research.json must contain a research object.")
+    normalized = dict(research)
+    normalized["mandatory"] = True
+    normalized["items"] = list(normalized.get("items") or [])
+    return normalized
+
+
+def validate_deep_research(research: dict[str, Any], source_only_requested: bool = False) -> dict[str, Any]:
+    issues: list[str] = []
+    if research.get("status") != "completed":
+        issues.append("research.status must be completed")
+    mode = research.get("mode")
+    if mode not in {"extended", "source_only"}:
+        issues.append("research.mode must be extended or source_only")
+    if source_only_requested and mode != "source_only":
+        issues.append("--source-only requires research.mode source_only")
+    items = research.get("items") or []
+    if not items:
+        issues.append("research.items cannot be empty")
+    origin_counts: Counter[str] = Counter()
+    for index, item in enumerate(items, 1):
+        origin = item.get("origin")
+        origin_counts[origin] += 1
+        if origin not in {"source", "source_inferred", "extension"}:
+            issues.append(f"items[{index}].origin must be source, source_inferred, or extension")
+        if mode == "source_only" and origin == "extension":
+            issues.append(f"items[{index}] cannot use origin extension in source_only mode")
+        for field in RESEARCH_ITEM_REQUIRED_FIELDS:
+            if not research_text_is_substantive(item.get(field)):
+                issues.append(f"items[{index}].{field} is missing or too thin")
+        source_refs = item.get("source_refs")
+        if not isinstance(source_refs, list) or not source_refs:
+            issues.append(f"items[{index}].source_refs must be a non-empty list")
+        elif not any(source_ref_has_source(ref, origin or "") for ref in source_refs):
+            issues.append(f"items[{index}].source_refs lacks usable source evidence")
+    if mode == "extended" and origin_counts.get("extension", 0) < 1:
+        issues.append("extended research requires at least one origin=extension item; use mode source_only if external research was unavailable")
+    if issues:
+        raise KaodaError("deep_research.json is incomplete: " + "; ".join(issues))
+    return research
+
+
+def load_deep_research(run_dir: Path, source_only_requested: bool = False) -> dict[str, Any]:
+    path = run_dir / "deep_research.json"
+    if not path.exists():
+        raise KaodaError(
+            "deep_research.json missing. Complete mandatory source analysis and core research before plan-exam."
+        )
+    payload = read_json(path)
+    research = normalize_deep_research_payload(payload)
+    research = validate_deep_research(research, source_only_requested=source_only_requested)
+    research["deep_research_path"] = str(path)
+    return research
+
+
 def split_csv(value: str | None, defaults: list[str]) -> list[str]:
     if not value:
         return list(defaults)
@@ -1201,14 +1367,41 @@ def write_research_prompt(run_dir: Path, report: dict[str, Any]) -> None:
 
 ## 输出要求
 
-把调研和深化结果写入 `exam_brief.json`，其中：
+把调研和深化结果写入同目录 `deep_research.json`，然后再运行 `plan-exam`。格式：
+
+```json
+{{
+  "version": "1.0",
+  "research": {{
+    "status": "completed",
+    "mandatory": true,
+    "mode": "extended",
+    "items": [
+      {{
+        "topic_id": "kp-01",
+        "topic": "核心概念",
+        "origin": "source",
+        "mechanism": "为什么成立",
+        "boundary": "什么时候不成立",
+        "misconception": "常见错误理解",
+        "counterexample": "反例或失败信号",
+        "transfer_scenario": "换场景如何用",
+        "source_refs": [
+          {{"segment_id": "seg-xxxx", "locator": {{"page": 1}}, "excerpt": "原文证据"}}
+        ]
+      }}
+    ]
+  }}
+}}
+```
 
 - `research.status` 必须是 `completed`。
 - `research.mode` 必须是 `extended` 或 `source_only`。
 - `research.items` 建议 3-8 个。
+- 每个 item 必须有 `mechanism`、`boundary`、`misconception`、`counterexample`、`transfer_scenario`、`source_refs`。
 - 每个 item 必须标注 `origin`: `source`, `extension`, 或 `source_inferred`。
-- 延伸研究必须说明为什么和原材料相关。
-- 原文内研究必须说明推理来自哪个原文片段。
+- 延伸研究必须至少有一个带 URL 的 `source_refs`。
+- 原文内研究必须说明推理来自哪个原文片段、页码、时间戳或文章 URL。
 - 不允许把延伸内容伪装成原文内容。
 
 ## 研究目标
@@ -1217,7 +1410,7 @@ def write_research_prompt(run_dir: Path, report: dict[str, Any]) -> None:
 
 如果用户明确要求“只按原文”，设置 `research.mode` 为 `source_only`，只做原文内研究，不引入外部来源；但研究步骤仍然必须完成。
 
-研究完成后，再让用户根据 `review_choices.md` 选择复盘模式、题目风格和是否加入错题知识。
+研究完成并写入 `deep_research.json` 后，再让用户根据 `review_choices.md` 选择复盘模式、题目风格和是否加入错题知识。
 """
     (run_dir / "research_prompt.md").write_text(content, encoding="utf-8")
 
@@ -1226,51 +1419,24 @@ def plan_exam(args: argparse.Namespace) -> dict[str, Any]:
     run_dir, source, segments, report = load_run(args.run_id)
     write_review_choices(run_dir, report, args.learner_id)
     write_research_prompt(run_dir, report)
+    deep_research = load_deep_research(run_dir, source_only_requested=args.source_only)
     question_profile = split_csv(args.question_types, DEFAULT_QUESTION_PROFILE)
     review_mode = normalize_review_mode(args.review_mode)
     mode_config = REVIEW_MODES[review_mode]
     question_style = normalize_question_style(args.question_style or args.style)
     duration_minutes = args.duration_minutes or int(mode_config["duration_minutes"])
-    checkpoint_count = clamp_checkpoint_count(args.checkpoint_count or int(mode_config["checkpoint_count"]))
+    if args.checkpoint_count:
+        checkpoint_count = recommend_checkpoint_count(report, segments, args.checkpoint_count)
+    elif review_mode == "复盘模式":
+        checkpoint_count = int(mode_config["checkpoint_count"])
+    else:
+        checkpoint_count = max(recommend_checkpoint_count(report, segments), int(mode_config["checkpoint_count"]))
     mistake_policy = args.mistake_knowledge_policy
     mistakes = summarize_mistake_bank(args.learner_id)
     if not mistakes:
         mistake_policy = "只复盘当前材料"
-    selected_topics = report.get("knowledge_map", {}).get("source_topics", [])[:5]
-    research_mode = "source_only" if args.source_only else "extended"
-    research_items = [
-        {
-            "topic_id": topic.get("id"),
-            "topic": topic.get("name"),
-            "origin": "source_inferred" if args.source_only else "source",
-            "mechanism": topic.get("mechanism_probe", "解释它为什么成立，不要只复述关键词。"),
-            "boundary": topic.get("boundary_probe", "写出不适用条件。"),
-            "misconception": topic.get("misconception_trap", "写出用户最可能的错误理解。"),
-            "transfer_scenario": topic.get("transfer_probe", "写出新场景。"),
-            "counterexample": f"找一个会推翻或限制「{topic.get('name')}」的失败信号。",
-            "research_dimensions": [
-                "机制",
-                "边界",
-                "常见误解",
-                "反例",
-                "迁移",
-                "背景/上下游/现实风险按内容发散",
-            ],
-        }
-        for topic in selected_topics
-    ]
-    if not args.source_only:
-        for topic in report.get("knowledge_map", {}).get("extension_topics", [])[:3]:
-            research_items.append(
-                {
-                    "topic_id": topic.get("id"),
-                    "topic": topic.get("name"),
-                    "origin": "extension",
-                    "related_source_focus": topic.get("source_focus", ""),
-                    "why_related": "用于补齐原材料没有展开但会影响理解和迁移的背景、边界或现实应用。",
-                    "research_dimensions": ["背景", "争议", "风险", "替代方案", "现实应用"],
-                }
-            )
+    research_mode = deep_research["mode"]
+    research_items = deep_research["items"]
     brief = {
         "version": "1.0",
         "run_id": args.run_id,
@@ -1298,8 +1464,9 @@ def plan_exam(args: argparse.Namespace) -> dict[str, Any]:
             "mode": research_mode,
             "mandatory": True,
             "items": research_items,
-            "notes": args.research_notes,
-            "source_only": args.source_only,
+            "notes": deep_research.get("notes") or args.research_notes,
+            "source_only": research_mode == "source_only",
+            "deep_research_path": deep_research.get("deep_research_path"),
             "scope": "核心研究强制完成；机制、边界、误解、反例、迁移只是保底，实际研究方向按内容发散。",
         },
         "mistake_knowledge": {
@@ -1939,9 +2106,10 @@ def write_grading_prompt(exam: dict[str, Any], path: Path) -> None:
 - 每道开放题必须输出 level、evidence、deduction_reason、mistake_tag、improvement。
 - 每道错题必须输出 learn_from，说明回到哪个知识点、片段或来源复习。
 - 输出总分、客观题得分、开放题得分、百分比和优先复习建议。
+- 如果存在开放题，复核完成后把 `grade.json.open_review.status` 改为 `completed`；未完成复核时不要运行 record。
 - mistake_tag 只能从这些值里选择：{", ".join(MISTAKE_TAGS)}。
 
-之后运行 `python scripts/kaoda.py record grade.json`，会归档 exam、attempt、grade 和错题。
+之后运行 `python scripts/kaoda.py record grade.json`，会归档 exam、attempt、grade、source/material/deep_research 和错题。
 
 考试：{exam.get("title")}
 开放题数量：{sum(1 for q in exam.get("questions", []) if q.get("type") == "open")}
@@ -1965,6 +2133,84 @@ def grade(args: argparse.Namespace) -> dict[str, Any]:
     output_path = attempt_path.parent / "grade.json"
     write_json(output_path, grade_payload)
     print_path(output_path, {"score": grade_payload["score"]["total"], "needs_agent_review": grade_payload["needs_agent_review"]})
+    return grade_payload
+
+
+def extract_markdown_json_block(markdown: str, heading: str) -> Any:
+    pattern = re.compile(
+        rf"(?ms)^##\s+{re.escape(heading)}\s*\n+```json\s*\n(.*?)\n```"
+    )
+    match = pattern.search(markdown)
+    if not match:
+        raise KaodaError(f"Cannot find JSON block under heading: {heading}")
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise KaodaError(f"Invalid JSON block under heading {heading}: {exc}") from exc
+
+
+def write_agent_open_review(exam: dict[str, Any], attempt: dict[str, Any], path: Path) -> None:
+    answers = answer_map(attempt)
+    lines = [
+        "# Agent 开放题复核任务",
+        "",
+        "请读取同目录 `grade.json`，只复核简答/口述题。完成后把 `open_review.status` 改为 `completed`，并补齐每道开放题的证据、扣分原因、rubric level、错因标签和改进建议。",
+        "",
+        "复核时不要按字数给分；先找答案证据，再按 rubric 给分。",
+        "",
+    ]
+    for question in exam.get("questions", []):
+        if question.get("type") != "open":
+            continue
+        lines.extend(
+            [
+                f"## {question.get('id')} · {question.get('knowledge_point', {}).get('name', '')}",
+                "",
+                f"题目：{question.get('prompt', '')}",
+                "",
+                f"用户答案：{answers.get(question.get('id'), '')}",
+                "",
+                "Rubric:",
+                "```json",
+                json.dumps(question.get("rubric", {}), ensure_ascii=False, indent=2),
+                "```",
+                "",
+            ]
+        )
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def grade_report(args: argparse.Namespace) -> dict[str, Any]:
+    report_path = Path(args.report).expanduser().resolve()
+    markdown = report_path.read_text(encoding="utf-8")
+    attempt = extract_markdown_json_block(markdown, "attempt.json")
+    exam = extract_markdown_json_block(markdown, "exam.json")
+    out_dir = ensure_dir(Path(args.out_dir).expanduser().resolve() if args.out_dir else report_path.parent)
+    attempt["exam_path"] = "exam.json"
+    learner_id = args.learner_id or attempt.get("learner_id") or "default"
+    write_json(out_dir / "attempt.json", attempt)
+    write_json(out_dir / "exam.json", exam)
+    write_grading_prompt(exam, out_dir / "grading_prompt.md")
+    grade_payload = grade_attempt(exam, attempt, learner_id)
+    grade_payload["artifacts"] = {
+        "agent_report_path": str(report_path),
+        "attempt_path": str(out_dir / "attempt.json"),
+        "exam_path": str(out_dir / "exam.json"),
+    }
+    if grade_payload["open_review"]["status"] == "pending_agent_review":
+        open_review_path = out_dir / "agent_open_review.md"
+        write_agent_open_review(exam, attempt, open_review_path)
+        grade_payload["open_review"]["agent_open_review_path"] = str(open_review_path)
+    output_path = out_dir / "grade.json"
+    write_json(output_path, grade_payload)
+    print_path(
+        output_path,
+        {
+            "score": grade_payload["score"]["total"],
+            "open_review": grade_payload["open_review"]["status"],
+            "next": "review open answers before record" if grade_payload["open_review"]["status"] == "pending_agent_review" else "python scripts/kaoda.py record grade.json",
+        },
+    )
     return grade_payload
 
 
@@ -2046,6 +2292,13 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
     total = objective_score + open_score
     max_total = objective_total + open_total
     needs_agent_review = open_total > 0
+    open_review = {
+        "status": "pending_agent_review" if needs_agent_review else "not_required",
+        "open_question_count": sum(1 for question in exam.get("questions", []) if question.get("type") == "open"),
+        "policy": "objective questions are final; open answers require agent rubric review before record"
+        if needs_agent_review
+        else "no open answers in this exam",
+    }
     return {
         "version": "1.0",
         "graded_at": iso_now(),
@@ -2054,6 +2307,7 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
         "run_id": exam.get("run_id"),
         "scoring_mode": "local objective scoring" if not needs_agent_review else "local objective scoring + heuristic open pre-grade; agent review recommended",
         "needs_agent_review": needs_agent_review,
+        "open_review": open_review,
         "score": {
             "objective": objective_score,
             "objective_total": objective_total,
@@ -2161,6 +2415,13 @@ def make_review_advice(results: list[dict[str, Any]]) -> list[str]:
 def record(args: argparse.Namespace) -> dict[str, Any]:
     grade_path = Path(args.grade).expanduser().resolve()
     grade_payload = read_json(grade_path)
+    open_status = (grade_payload.get("open_review") or {}).get("status")
+    if open_status == "pending_agent_review" or (grade_payload.get("needs_agent_review") and open_status != "completed"):
+        raise KaodaError(
+            "grade.json contains open answers pending Agent review. Complete rubric review and set open_review.status to completed before record."
+        )
+    if open_status and open_status not in {"not_required", "completed"}:
+        raise KaodaError(f"Unsupported open_review.status for record: {open_status}")
     exam_path = grade_path.parent / "exam.json"
     exam = read_json(exam_path) if exam_path.exists() else {"questions": []}
     q_by_id = {q["id"]: q for q in exam.get("questions", [])}
@@ -2194,15 +2455,27 @@ def archive_grade_session(
 ) -> Path:
     exam_id = grade_payload.get("exam_id") or "exam"
     stamp = (grade_payload.get("graded_at") or iso_now()).replace(":", "").replace("-", "")
-    archive_id = f"{stamp[:15]}-{stable_slug(learner_id + exam_id, 8)}"
-    archive_dir = ensure_dir(data_dir() / "learners" / learner_id / "archive" / archive_id)
+    archive_base = f"{stamp[:15]}-{stable_slug(learner_id + exam_id, 8)}"
+    archive_root = data_dir() / "learners" / learner_id / "archive"
+    archive_id = archive_base
+    archive_dir = archive_root / archive_id
+    suffix = 2
+    while archive_dir.exists():
+        archive_id = f"{archive_base}-{suffix}"
+        archive_dir = archive_root / archive_id
+        suffix += 1
+    archive_dir = ensure_dir(archive_dir)
     copied: dict[str, str] = {}
+    run_dir = data_dir() / "runs" / str(grade_payload.get("run_id") or "")
     candidates = {
         "grade": grade_path,
         "exam": grade_path.parent / "exam.json",
         "exam_html": grade_path.parent / "exam.html",
         "attempt": grade_path.parent / "attempt.json",
         "grading_prompt": grade_path.parent / "grading_prompt.md",
+        "source": run_dir / "source.json",
+        "material_report": run_dir / "material_report.json",
+        "deep_research": run_dir / "deep_research.json",
     }
     for name, path in candidates.items():
         if path.exists():
@@ -2365,22 +2638,16 @@ def weekly(args: argparse.Namespace) -> dict[str, Any]:
     bank_path = data_dir() / "learners" / learner_id / "mistake_bank.jsonl"
     all_mistakes = read_jsonl(bank_path)
     mistakes = [m for m in all_mistakes if parse_time(m.get("created_at")) >= since_dt]
-    if not mistakes:
-        raise KaodaError(f"No mistakes found for learner {learner_id} since {args.since}")
+    archive_contexts = load_weekly_archive_contexts(learner_id, since_dt)
+    if not mistakes and not archive_contexts:
+        raise KaodaError(f"No archive or mistakes found for learner {learner_id} since {args.since}")
     week_id = utc_now().strftime("%G-W%V")
     weekly_dir = ensure_dir(data_dir() / "learners" / learner_id / "weekly" / week_id)
     selected = select_weekly_mistakes(mistakes)
-    exam = make_variant_exam(
-        learner_id,
-        f"weekly-{week_id}-{stable_slug(learner_id, 6)}",
-        selected,
-        "weekly",
-        weekly_mix={"weak_variants": 60, "core_knowledge": 25, "transfer_challenge": 15},
-    )
-    exam["title"] = f"本周综合拷问卷：{week_id}"
+    exam = make_weekly_exam(learner_id, week_id, selected, archive_contexts)
     write_json(weekly_dir / "weekly_exam.json", exam)
     render_exam_html(exam, weekly_dir / "weekly_exam.html")
-    analysis = make_weekly_analysis(learner_id, week_id, mistakes)
+    analysis = make_weekly_analysis(learner_id, week_id, mistakes, archive_contexts, exam)
     (weekly_dir / "analysis.md").write_text(analysis, encoding="utf-8")
     print_path(weekly_dir / "weekly_exam.html", {"week_id": week_id, "questions": len(exam["questions"])})
     return exam
@@ -2417,15 +2684,248 @@ def select_weekly_mistakes(mistakes: list[dict[str, Any]], limit: int = 12) -> l
     return selected[:limit]
 
 
-def make_weekly_analysis(learner_id: str, week_id: str, mistakes: list[dict[str, Any]]) -> str:
+def resolve_archived_file(archive_dir: Path, manifest: dict[str, Any], key: str, fallback_name: str) -> Path | None:
+    raw = (manifest.get("files") or {}).get(key)
+    if raw:
+        path = Path(raw)
+        if path.exists():
+            return path
+    fallback = archive_dir / fallback_name
+    return fallback if fallback.exists() else None
+
+
+def load_weekly_archive_contexts(learner_id: str, since_dt: datetime) -> list[dict[str, Any]]:
+    archive_root = data_dir() / "learners" / learner_id / "archive"
+    contexts: list[dict[str, Any]] = []
+    if not archive_root.exists():
+        return contexts
+    for manifest_path in sorted(archive_root.glob("*/archive_manifest.json")):
+        manifest = read_json(manifest_path)
+        archived_at = parse_time(manifest.get("archived_at"))
+        if archived_at < since_dt:
+            continue
+        archive_dir = manifest_path.parent
+        material_path = resolve_archived_file(archive_dir, manifest, "material_report", "material_report.json")
+        deep_path = resolve_archived_file(archive_dir, manifest, "deep_research", "deep_research.json")
+        exam_path = resolve_archived_file(archive_dir, manifest, "exam", "exam.json")
+        source_path = resolve_archived_file(archive_dir, manifest, "source", "source.json")
+        context = {
+            "archive_dir": str(archive_dir),
+            "manifest": manifest,
+            "source": read_json(source_path) if source_path else {},
+            "material_report": read_json(material_path) if material_path else {},
+            "deep_research": read_json(deep_path) if deep_path else {},
+            "exam": read_json(exam_path) if exam_path else {},
+        }
+        contexts.append(context)
+    return contexts
+
+
+def source_ref_to_segment(ref: dict[str, Any], fallback_text: str, run_id: str, index: int) -> dict[str, Any]:
+    return {
+        "segment_id": ref.get("segment_id") or f"weekly-{stable_slug(run_id, 6)}-{index:03d}",
+        "source_id": run_id or "weekly-archive",
+        "kind": "archive",
+        "locator": ref.get("locator") if isinstance(ref.get("locator"), dict) else {"archive_run_id": run_id},
+        "text": ref.get("excerpt") or fallback_text,
+    }
+
+
+def weekly_topic_rows(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for context in contexts:
+        manifest = context.get("manifest") or {}
+        run_id = manifest.get("run_id") or context.get("exam", {}).get("run_id") or ""
+        report = context.get("material_report") or {}
+        deep = normalize_deep_research_payload(context.get("deep_research") or {"research": {}})
+        research_by_id = {item.get("topic_id"): item for item in deep.get("items", []) if item.get("topic_id")}
+        research_by_name = {item.get("topic"): item for item in deep.get("items", []) if item.get("topic")}
+        topics = report.get("knowledge_map", {}).get("source_topics", [])
+        if not topics:
+            topics = context.get("exam", {}).get("knowledge_map", {}).get("source_topics", [])
+        for topic in topics[:6]:
+            name = topic.get("name") or "核心知识"
+            key = f"{run_id}:{name}"
+            if key in seen:
+                continue
+            seen.add(key)
+            item = research_by_id.get(topic.get("id")) or research_by_name.get(name) or {}
+            merged = dict(topic)
+            for field in RESEARCH_ITEM_REQUIRED_FIELDS:
+                if item.get(field):
+                    merged[field] = item[field]
+            refs = item.get("source_refs") or []
+            segment = source_ref_to_segment(
+                refs[0] if refs else {},
+                topic.get("evidence_excerpt") or topic.get("diagnostic_focus") or name,
+                run_id,
+                len(rows) + 1,
+            )
+            rows.append({"topic": merged, "segment": segment, "run_id": run_id, "source_title": context.get("source", {}).get("title") or run_id})
+    return rows
+
+
+def make_weekly_topic_question(index: int, row: dict[str, Any], qtype: str, source_layer: str) -> dict[str, Any]:
+    question = make_question(
+        index,
+        "迁移应用" if source_layer == "transfer" else "边界识别",
+        row["segment"],
+        row["topic"],
+        "混合风格",
+        extension=source_layer != "material_core",
+        question_type=qtype,
+        style_family="transfer_scene" if source_layer == "transfer" else "serious_review",
+        source_layer=source_layer,
+    )
+    question["id"] = f"w{index:02d}"
+    question["weekly_source"] = source_layer
+    question["archive_run_id"] = row.get("run_id")
+    if source_layer == "transfer":
+        question["prompt"] = f"把「{row['topic'].get('name', '核心知识')}」换到另一个本周材料场景时，哪一项处理更合适？"
+    return question
+
+
+def make_weekly_exam(
+    learner_id: str,
+    week_id: str,
+    mistakes: list[dict[str, Any]],
+    archive_contexts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target_count = 20 if len(archive_contexts) >= 3 else max(15, min(20, len(mistakes) + 8))
+    weak_target = min(len(mistakes), max(1, round(target_count * 0.6))) if mistakes else 0
+    core_target = max(0, round(target_count * 0.25))
+    transfer_target = max(0, target_count - weak_target - core_target)
+    topic_rows = weekly_topic_rows(archive_contexts)
+    questions: list[dict[str, Any]] = []
+
+    for mistake in mistakes[:weak_target]:
+        index = len(questions) + 1
+        question = make_variant_question(index, mistake, "single_choice")
+        question["id"] = f"w{index:02d}"
+        question["weekly_source"] = "mistake_variant"
+        questions.append(question)
+
+    for row in topic_rows[:core_target]:
+        index = len(questions) + 1
+        qtype = "multiple_choice" if index % 3 == 0 else "single_choice"
+        questions.append(make_weekly_topic_question(index, row, qtype, "material_core"))
+
+    transfer_pool = topic_rows[core_target:] or topic_rows
+    for row in transfer_pool[:transfer_target]:
+        index = len(questions) + 1
+        qtype = "true_false" if index % 2 == 0 else "single_choice"
+        questions.append(make_weekly_topic_question(index, row, qtype, "transfer"))
+
+    if not questions and mistakes:
+        for mistake in mistakes[:target_count]:
+            index = len(questions) + 1
+            question = make_variant_question(index, mistake, "single_choice")
+            question["id"] = f"w{index:02d}"
+            question["weekly_source"] = "mistake_variant"
+            questions.append(question)
+
+    if not questions:
+        raise KaodaError("Not enough archive topics or mistake entries to build a weekly review.")
+
+    weekly_research_items: list[dict[str, Any]] = []
+    for context in archive_contexts:
+        deep = normalize_deep_research_payload(context.get("deep_research") or {"research": {}})
+        weekly_research_items.extend(deep.get("items", [])[:4])
+        if len(weekly_research_items) >= 12:
+            break
+
+    brief = {
+        "version": "1.0",
+        "run_id": f"weekly-{week_id}",
+        "created_at": iso_now(),
+        "learner_goal": "本周综合拷问：错题弱点、材料核心知识和跨材料迁移",
+        "review_mode": "正常模式",
+        "review_mode_label": REVIEW_MODES["正常模式"]["label"],
+        "duration_minutes": 10,
+        "question_style": "混合风格",
+        "exam_style": "混合风格",
+        "question_profile": DEFAULT_QUESTION_PROFILE,
+        "checkpoint_count": len(questions),
+        "question_mix_target": question_mix_target("正常模式"),
+        "review_selection": {"status": "confirmed", "selected_after_research": True},
+        "research": {
+            "status": "completed",
+            "mandatory": True,
+            "mode": "source_only" if len(archive_contexts) < 3 else "extended",
+            "items": weekly_research_items,
+            "notes": "weekly exam synthesized from archived material reports, deep research, and mistake bank.",
+        },
+        "weekly_mix": {
+            "weak_variants": 60,
+            "core_knowledge": 25,
+            "transfer_challenge": 15,
+            "actual_counts": Counter(q.get("weekly_source", "unknown") for q in questions),
+            "archive_count": len(archive_contexts),
+            "downgraded": len(archive_contexts) < 3,
+        },
+    }
+    return {
+        "version": "1.0",
+        "exam_id": f"weekly-{week_id}-{stable_slug(learner_id, 6)}",
+        "exam_kind": "weekly",
+        "learner_id": learner_id,
+        "run_id": f"weekly-{week_id}",
+        "title": f"本周综合拷问卷：{week_id}",
+        "mode": "混合风格",
+        "review_mode": "正常模式",
+        "duration_minutes": 10,
+        "question_style": "混合风格",
+        "created_at": iso_now(),
+        "material_source": {"input": "archive+mistake_bank", "input_type": "local_memory"},
+        "knowledge_map": {"source_topics": [row["topic"] for row in topic_rows]},
+        "exam_brief": brief,
+        "review_design": {
+            "positioning": "weekly synthesis review",
+            "review_mode": "正常模式",
+            "question_style": "混合风格",
+            "checkpoint_count": len(questions),
+            "mix": summarize_question_mix(questions),
+            "weekly_mix": brief["weekly_mix"],
+            "requires_agent_review": any(question.get("type") == "open" for question in questions),
+        },
+        "question_sections": build_question_sections(questions),
+        "variant_rules": [
+            "同一知识点可以重复考",
+            "同一题干不能重复",
+            "同一场景不能连续重复",
+            "同一错因必须换角度考",
+            "复习题必须更接近真实应用",
+        ],
+        "questions": questions,
+    }
+
+
+def make_weekly_analysis(
+    learner_id: str,
+    week_id: str,
+    mistakes: list[dict[str, Any]],
+    archive_contexts: list[dict[str, Any]],
+    exam: dict[str, Any],
+) -> str:
     tag_counts = Counter(m.get("mistake_tag", "unknown") for m in mistakes)
     kp_counts = Counter(m.get("knowledge_point", {}).get("name", "unknown") for m in mistakes)
     top_fake = tag_counts.most_common(3)
+    source_titles = [
+        context.get("source", {}).get("title")
+        or context.get("source", {}).get("input")
+        or context.get("manifest", {}).get("run_id")
+        or "未命名材料"
+        for context in archive_contexts
+    ]
+    weekly_sources = Counter(q.get("weekly_source", "unknown") for q in exam.get("questions", []))
     lines = [
         f"# 本周综合拷问分析：{week_id}",
         "",
         f"- learner_id: `{learner_id}`",
         f"- mistakes: {len(mistakes)}",
+        f"- archives: {len(archive_contexts)}",
+        f"- weekly_mix: {dict(weekly_sources)}",
         "",
         "## 本周最容易误判的 3 个地方",
     ]
@@ -2434,6 +2934,21 @@ def make_weekly_analysis(learner_id: str, week_id: str, mistakes: list[dict[str,
     lines.extend(["", "## 高频薄弱知识点"])
     for kp, count in kp_counts.most_common(8):
         lines.append(f"- {kp}：{count} 次")
+    lines.extend(["", "## 跨材料共同模式"])
+    if len(archive_contexts) >= 3:
+        lines.append("- 本次周考同时使用历史错题、材料核心知识点和跨材料迁移题。")
+    else:
+        lines.append("- archive 不足 3 个，本次降级为错题变种周复习，避免假装做了跨材料综合。")
+    for title in source_titles[:6]:
+        lines.append(f"- 材料：{title}")
+    lines.extend(["", "## 本次周考题目来源"])
+    for source, count in weekly_sources.items():
+        label = {
+            "mistake_variant": "历史错题弱点变种",
+            "material_core": "本周材料核心知识点重组",
+            "transfer": "跨材料迁移/综合应用题",
+        }.get(source, source)
+        lines.append(f"- {label}：{count} 题")
     lines.extend(
         [
             "",
@@ -2993,6 +3508,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("attempt")
     p.add_argument("--learner-id", default=None)
     p.set_defaults(func=grade)
+
+    p = sub.add_parser("grade-report", help="读取 kaoda_agent_report.md 并生成 attempt/exam/grade 文件")
+    p.add_argument("report")
+    p.add_argument("--learner-id", default=None)
+    p.add_argument("--out-dir", default=None)
+    p.set_defaults(func=grade_report)
 
     p = sub.add_parser("record", help="把 grade.json 写入本地错题库")
     p.add_argument("grade")

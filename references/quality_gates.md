@@ -14,6 +14,10 @@ Run these checks before presenting a generated review checklist or report.
 ## Planning Integrity
 
 - `exam_brief.json` exists before `exam.json`.
+- `deep_research.json` exists before `plan-exam`.
+- `deep_research.json.research.status` is `completed`.
+- Every deep-research item has `mechanism`, `boundary`, `misconception`, `counterexample`, `transfer_scenario`, and non-empty `source_refs`.
+- `extended` deep research includes at least one `origin: "extension"` item with a source URL; `source_only` deep research includes no extension items.
 - `exam_brief.review_selection.status` is `confirmed`.
 - `exam_brief.review_mode` is one of `复盘模式`, `正常模式`, `拷打模式`, or `深度拷打`.
 - `exam_brief.duration_minutes` matches the selected mode unless explicitly overridden.
@@ -55,6 +59,9 @@ Run these checks before presenting a generated review checklist or report.
 - After submission, the HTML shows a report with total score, type-level score, wrong questions, weak knowledge points, and next-step instructions.
 - The exported Agent report package includes report summary, objective pregrade, full answers, `attempt.json`, `exam.json`, and instructions to generate `grade.json` and run `record`.
 - Open-answer reviews clearly say the browser score is an objective pregrade and Agent review is needed for short/oral answers.
+- `grade-report <kaoda_agent_report.md>` parses the exported report and writes `attempt.json`, `exam.json`, `grading_prompt.md`, and `grade.json`.
+- `grade.json.open_review.status` is `not_required` for objective-only reviews, `pending_agent_review` before open-answer rubric review, or `completed` after Agent review.
+- `record` must refuse `pending_agent_review` so heuristic open pregrades are not archived as final scores.
 - Every open result includes evidence before score.
 - Every wrong answer has a mistake tag.
 - Every wrong answer has `learn_from` or equivalent source/knowledge-point guidance.
@@ -65,9 +72,9 @@ Run these checks before presenting a generated review checklist or report.
 ## Memory Quality
 
 - Mistake bank entries preserve knowledge point and mistake tag.
-- `record` archives exam, HTML exam, attempt, grade, and wrong questions under `data/learners/<id>/archive/`.
+- `record` archives exam, HTML exam, attempt, grade, source, material report, deep research, and wrong questions under `data/learners/<id>/archive/`.
 - Review exams use variants, not copied prompts.
-- Weekly exams aggregate across materials.
+- Weekly exams aggregate across recent archive files and mistake bank entries; when fewer than 3 archive sessions exist, the analysis must state the downgrade to mistake-variant weekly review.
 - Old stale mistakes are not deleted silently; mark status instead.
 
 ## Dashboard Quality

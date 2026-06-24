@@ -6,7 +6,7 @@ This gate prevents the skill from degenerating into a summary, an ordinary quiz 
 
 1. Ingest source material. If the user only gives a title or topic, run `research-topic`, do research, write `topic_research.md` and `source_links.json`, then run `ingest-topic`.
 2. Read `material_report.json`.
-3. Complete source analysis and mandatory core research/deepening.
+3. Complete source analysis and mandatory core research/deepening, then write `deep_research.json`.
 4. Ask the learner only the lightweight post-research choices.
 5. Run `plan-exam` to write `review_choices.md`, `research_prompt.md`, and `exam_brief.json`.
 6. Only then run `build-exam`.
@@ -28,26 +28,35 @@ For every material or topic, deepen the core concepts. Mechanism, boundary, misc
 
 If the learner explicitly says "只按原文", "source-only", or equivalent, keep `research.mode` as `source_only`: do source-internal research and inference only, do not introduce outside sources. This still counts as research; it is not a skip.
 
-`exam_brief.json.research` must include:
+`deep_research.json` must include:
 
 ```json
 {
-  "status": "completed",
-  "mandatory": true,
-  "mode": "extended",
-  "items": [
-    {
-      "origin": "source",
-      "mechanism": "...",
-      "boundary": "...",
-      "misconception": "...",
-      "transfer_scenario": "..."
-    }
-  ]
+  "version": "1.0",
+  "research": {
+    "status": "completed",
+    "mandatory": true,
+    "mode": "extended",
+    "items": [
+      {
+        "origin": "source",
+        "mechanism": "...",
+        "boundary": "...",
+        "misconception": "...",
+        "counterexample": "...",
+        "transfer_scenario": "...",
+        "source_refs": [
+          {"segment_id": "seg-0001", "locator": {"page": 1}, "excerpt": "..."}
+        ]
+      }
+    ]
+  }
 }
 ```
 
 Use `origin: "source"` for source-derived knowledge, `origin: "source_inferred"` for source-only inference, and `origin: "extension"` for external extension research. Never present extension knowledge as if it came from the original material.
+
+`plan-exam` reads `deep_research.json` and copies the validated research object into `exam_brief.json.research`. It must fail when the file is missing, items are empty, required fields are thin, or source refs are absent. In `source_only` mode, no item may use `origin: "extension"`. In `extended` mode, include at least one `origin: "extension"` item with an external source URL; if external research was unavailable, set the mode to `source_only` and say why.
 
 ## Lightweight Post-Research Choices
 
@@ -90,14 +99,14 @@ When the user says something like "我想了解 token" and provides no material:
 2. Use available research tools to gather reliable sources.
 3. Write `topic_research.md` and `source_links.json` in the run directory.
 4. Run `python scripts/kaoda.py ingest-topic <id>`.
-5. Complete mandatory research/deepening on the resulting notes.
+5. Confirm or refine the generated `deep_research.json` from the resulting notes and source links.
 6. Ask the lightweight choices, then continue with `plan-exam` and `build-exam`.
 
 Do not generate questions from the bare topic string. The research note is the source material.
 
 ## plan-exam Contract
 
-After mandatory research and lightweight selection, run:
+After mandatory research is written to `deep_research.json` and lightweight selection is known, run:
 
 ```bash
 python scripts/kaoda.py plan-exam <run_id> \
