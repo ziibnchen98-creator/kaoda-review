@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kaoda-review"
+version = "0.1.0"
+description = "Local-first Agent Skill for research-backed understanding diagnostics."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "kaoda-review contributors" }
+]
+keywords = ["agent-skill", "learning", "quiz", "review", "diagnostics"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Education",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Education",
+]
+
+[project.urls]
+Homepage = "https://github.com/ziibnchen98-creator/kaoda-review"
+Repository = "https://github.com/ziibnchen98-creator/kaoda-review"
+
+[project.scripts]
+kaoda-review = "scripts.kaoda:main"
+
+[tool.setuptools]
+packages = ["scripts"]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"share/kaoda-review" = [
+  "SKILL.md",
+  "README.md",
+  "LICENSE",
+  "AGENTS.md",
+  "CLAUDE.md",
+]
+"share/kaoda-review/agents" = [
+  "agents/openai.yaml",
+]
+"share/kaoda-review/assets/exam-template" = [
+  "assets/exam-template/index.html",
+]
+"share/kaoda-review/references" = [
+  "references/intake_and_research.md",
+  "references/mistake_taxonomy.md",
+  "references/quality_gates.md",
+  "references/question_design.md",
+  "references/rubrics.md",
+  "references/source_ingestion.md",
+  "references/weekly_review.md",
+]
+

@@ -1,0 +1,6 @@
+include SKILL.md README.md LICENSE AGENTS.md CLAUDE.md
+include agents/openai.yaml
+include assets/exam-template/index.html
+recursive-include references *.md
+recursive-include tests *.py *.json *.txt *.srt
+

@@ -29,8 +29,42 @@ from typing import Any
 
 
 VERSION = "0.1.0"
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATA_DIR = ROOT / "data"
+PACKAGE_SHARE_NAME = "kaoda-review"
+
+
+def has_skill_resources(root: Path) -> bool:
+    return (root / "SKILL.md").exists() and (root / "assets" / "exam-template" / "index.html").exists()
+
+
+def resolve_root(
+    module_file: Path | str | None = None,
+    env: dict[str, str] | None = None,
+    prefix: Path | str | None = None,
+) -> Path:
+    env = env if env is not None else os.environ
+    module_path = Path(module_file or __file__).resolve()
+    prefix_path = Path(prefix or sys.prefix)
+    candidates: list[Path] = []
+    if env.get("KAODA_SKILL_ROOT"):
+        candidates.append(Path(env["KAODA_SKILL_ROOT"]).expanduser())
+    candidates.append(module_path.parents[1])
+    candidates.append(prefix_path / "share" / PACKAGE_SHARE_NAME)
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if has_skill_resources(candidate):
+            return candidate
+    return module_path.parents[1].resolve()
+
+
+def default_data_dir_for(root: Path) -> Path:
+    if (root / "scripts" / "kaoda.py").exists():
+        return root / "data"
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / PACKAGE_SHARE_NAME
+
+
+ROOT = resolve_root()
+DEFAULT_DATA_DIR = default_data_dir_for(ROOT)
 TEMPLATE_PATH = ROOT / "assets" / "exam-template" / "index.html"
 
 ABILITY_TYPES = [
@@ -71,7 +105,7 @@ SCENARIO_POOL = [
     "在面试中被追问边界条件",
     "老板要求你把概念转成可落地动作",
     "用同一原则判断一个相反案例",
-    "把材料中的方法迁移到另一个工具",
+    "把学到的方法迁移到另一个工具",
 ]
 
 DEFAULT_QUESTION_PROFILE = [
@@ -239,6 +273,15 @@ BAD_VISIBLE_PROMPT_PATTERNS = [
     "伪理解",
 ]
 
+BAD_VISIBLE_CONDITION_PATTERNS = [
+    "根据材料",
+    "符合材料",
+    "材料里",
+    "材料对",
+    "材料中的",
+    "材料里的",
+]
+
 INFORMATION_CUES = [
     "为什么",
     "因为",
@@ -291,6 +334,75 @@ CHINESE_TOPIC_CUES = [
     "应用",
     "落地",
     "错因",
+]
+
+GENERIC_TOPIC_STOPWORDS = {
+    "例如",
+    "应该",
+    "不能",
+    "不要",
+    "可以",
+    "需要",
+    "用户",
+    "项目",
+    "系统",
+    "内容",
+    "材料",
+    "问题",
+    "模块",
+    "阶段",
+    "格式",
+    "建议",
+    "当前",
+    "之后",
+    "其中",
+    "包括",
+    "以下",
+    "标准",
+    "链接",
+    "我的答案",
+    "正确答案",
+    "根据材料",
+    "根据材料选择",
+    "核心问题总结",
+    "主要问题包括",
+    "产品逻辑重新划分",
+    "这个项目需要明确区分四个东西",
+    "它只需要告诉用户",
+    "类比真实考试场景",
+    "错题集的重点是让用户一眼看懂",
+    "错题集的结构建议如下",
+    "每一道错题包含",
+    "题目",
+    "知识解读",
+    "大白话解释",
+    "建议改成",
+    "每道题必须绑定",
+    "特别注意",
+    "错误示例",
+    "正确做法",
+    "错题",
+    "考试",
+    "复盘",
+    "engineering",
+}
+
+STRUCTURAL_TOPIC_RULES = [
+    (r"考试结果页|成绩单|成绩反馈", "考试结果页"),
+    (r"错题集", "错题集"),
+    (r"错题卡片结构|每一道错题包含", "错题卡片结构"),
+    (r"错题笔记", "错题笔记合并"),
+    (r"学习报告", "学习报告"),
+    (r"Agent\s*讲解|Agent\s*复盘", "Agent 讲解复盘"),
+    (r"考试知识库", "考试知识库"),
+    (r"出题链路|出题流程|材料、研究、题目、答案", "出题链路"),
+    (r"每道题必须绑定|材料依据|评分标准|常见错误答案", "题目依据绑定"),
+    (r"根据材料|题目语言|题目条件|提供材料片段", "题目条件一致性"),
+    (r"考卷命名|考卷名称|命名规则", "考卷命名规则"),
+    (r"视觉风格|设计风格", "视觉风格统一"),
+    (r"语言风格|AI 味|大白话", "语言风格"),
+    (r"看板|学习闭环|下一步建议", "学习闭环看板"),
+    (r"Loop\s*Engineering|循环优化|目标\s*→\s*计划", "Loop Engineering 优化机制"),
 ]
 
 AUDIO_FILE_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
@@ -1174,6 +1286,91 @@ def is_weak_keyword(token: str) -> bool:
     return any(token.startswith(prefix) for prefix in weak_prefixes) or any(fragment in token for fragment in weak_fragments)
 
 
+def is_bad_topic_name(token: str) -> bool:
+    cleaned = normalize_keyword_token(token).strip(" ：:，,。；;、")
+    lowered = cleaned.lower()
+    if not cleaned or lowered in GENERIC_TOPIC_STOPWORDS:
+        return True
+    if len(cleaned) < 2:
+        return True
+    if cleaned.startswith(
+        (
+            "主要问题",
+            "这个项目",
+            "它只需要",
+            "它的目标",
+            "类比",
+            "如果用户回答错了",
+            "如果没有材料",
+            "如果有材料",
+            "阅读以下材料",
+            "边界是",
+            "它不是",
+            "是",
+        )
+    ):
+        return True
+    if cleaned.endswith(("如下", "包括", "看懂", "应该包含")):
+        return True
+    if re.fullmatch(r"[A-Za-z]+", cleaned) and lowered not in {"agent", "workflow", "rag", "token"}:
+        return True
+    if cleaned.endswith(("是什么", "为什么", "怎么做")):
+        return True
+    return False
+
+
+def normalize_heading_topic(line: str) -> str:
+    topic = line.strip()
+    topic = re.sub(r"^[一二三四五六七八九十]+[、.．]\s*", "", topic)
+    topic = re.sub(r"^\d+[.、．]\s*", "", topic)
+    topic = re.split(r"[：:]", topic, maxsplit=1)[0].strip()
+    topic = re.sub(r"^(为本项目设计|本项目|当前)", "", topic).strip()
+    topic = topic.strip("“”\"'：:，,。；;、")
+    if "Loop Engineering" in topic and "机制" in topic:
+        return "Loop Engineering 优化机制"
+    if len(topic) > 18:
+        for cue in ["优化", "规则", "机制", "阶段", "模块", "流程", "链路", "风格", "报告", "看板"]:
+            pos = topic.find(cue)
+            if pos >= 0:
+                topic = topic[: pos + len(cue)]
+                break
+    return topic
+
+
+def structural_topic_candidates(text: str, limit: int = 18) -> list[str]:
+    rule_candidates: list[str] = []
+    heading_candidates: list[str] = []
+
+    def add(bucket: list[str], value: str) -> None:
+        value = normalize_keyword_token(normalize_heading_topic(value), max_chars=18)
+        if value and not is_bad_topic_name(value) and value not in bucket:
+            bucket.append(value)
+
+    for raw_line in clean_learning_text(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        for pattern, topic in STRUCTURAL_TOPIC_RULES:
+            if re.search(pattern, line, re.I):
+                add(rule_candidates, topic)
+        looks_like_heading = bool(re.match(r"^([一二三四五六七八九十]+[、.．]|\d+[.、．])", line))
+        has_heading_colon = "：" in line or ":" in line
+        if looks_like_heading or (has_heading_colon and len(line) <= 36):
+            add(heading_candidates, line)
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for value in rule_candidates + heading_candidates:
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(value)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
 def keyword_candidates(text: str, limit: int = 24) -> list[str]:
     cleaned = re.sub(r"https?://\S+", "", text)
     raw_tokens = re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}", cleaned)
@@ -1210,7 +1407,11 @@ def keyword_candidates(text: str, limit: int = 24) -> list[str]:
         "that",
         "this",
     }
-    counts = Counter(token for token in tokens if token.lower() not in stop and not is_weak_keyword(token))
+    counts = Counter(
+        token
+        for token in tokens
+        if token.lower() not in stop and not is_weak_keyword(token) and not is_bad_topic_name(token)
+    )
     keywords: list[str] = []
     seen: set[str] = set()
     for word, _ in counts.most_common(limit * 2):
@@ -1248,8 +1449,26 @@ def informative_segments(segments: list[dict[str, Any]], limit: int | None = Non
     return rows[:limit] if limit is not None else rows
 
 
+def topic_match_terms(topic: str) -> list[str]:
+    mapped = {
+        "错题笔记合并": ["错题笔记", "错题解析"],
+        "Agent 讲解复盘": ["Agent 讲解", "Agent 复盘", "导入 Agent"],
+        "出题链路": ["出题链路", "出题流程", "考试知识库", "材料、研究、题目、答案"],
+        "题目依据绑定": ["每道题必须绑定", "材料依据", "标准答案", "常见错误答案"],
+        "题目条件一致性": ["题目条件", "题目语言", "根据材料", "提供材料片段"],
+        "考卷命名规则": ["考卷命名", "考卷名称", "命名规则"],
+        "视觉风格统一": ["视觉风格", "设计风格", "风格统一"],
+        "语言风格": ["语言风格", "AI 味", "大白话"],
+        "学习闭环看板": ["看板", "学习闭环", "下一步建议"],
+        "Loop Engineering 优化机制": ["Loop Engineering", "循环优化", "目标 → 计划"],
+    }
+    terms = mapped.get(topic, [])
+    return [topic, *terms]
+
+
 def text_contains_topic(text: str, topic: str) -> bool:
-    return topic.lower() in text.lower()
+    lowered = text.lower()
+    return any(term and term.lower() in lowered for term in topic_match_terms(topic))
 
 
 def select_evidence_segments(
@@ -1302,20 +1521,41 @@ def rank_keywords_by_evidence(keywords: list[str], segments: list[dict[str, Any]
     return sorted(keywords, key=rank, reverse=True)
 
 
+def merge_topic_candidates(primary: list[str], fallback: list[str], limit: int = 24) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for keyword in primary + fallback:
+        normalized = normalize_keyword_token(keyword, max_chars=18).strip()
+        key = normalized.lower()
+        if is_bad_topic_name(normalized) or key in seen:
+            continue
+        if any(
+            min(len(normalized), len(existing)) >= 4
+            and abs(len(normalized) - len(existing)) <= 4
+            and (normalized.startswith(existing) or existing.startswith(normalized))
+            for existing in merged
+        ):
+            continue
+        seen.add(key)
+        merged.append(normalized)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
 def build_material_report(run_id: str, source: dict[str, Any], segments: list[dict[str, Any]]) -> dict[str, Any]:
     all_text = "\n".join(row["text"] for row in segments)
-    keywords = rank_keywords_by_evidence(keyword_candidates(all_text), segments)
+    structural_keywords = structural_topic_candidates(all_text)
+    ranked_keywords = rank_keywords_by_evidence(keyword_candidates(all_text), segments)
+    keywords = merge_topic_candidates(structural_keywords, ranked_keywords)
     source_topics: list[dict[str, Any]] = []
     seen_names: set[str] = set()
-    seen_focuses: set[str] = set()
     for keyword in keywords:
         topic = make_source_topic(len(source_topics) + 1, keyword, segments)
         name_key = topic["name"].lower()
-        focus_key = topic.get("diagnostic_focus", "").lower()
-        if name_key in seen_names or focus_key in seen_focuses:
+        if name_key in seen_names:
             continue
         seen_names.add(name_key)
-        seen_focuses.add(focus_key)
         source_topics.append(topic)
         if len(source_topics) >= 16:
             break
@@ -1765,6 +2005,13 @@ def plan_exam(args: argparse.Namespace) -> dict[str, Any]:
             "must_research_before_build": True,
             "must_include_question_types": question_profile,
             "must_not_generate_summary_only": True,
+            "loop_engineering": {
+                "goal": "先明确本轮要发现的理解问题，而不是只复述材料。",
+                "plan": "每道题绑定知识点、材料依据、题型、答案和错因方向。",
+                "do": "按计划生成复盘单、标准答案、解析、成绩单和 Agent 报告包。",
+                "check": "检查题目是否有依据、题干条件是否一致、成绩单是否简洁、错题包是否可复盘。",
+                "act": "发现脱节、AI 味、标题泛化或错题说明混乱时，回到对应环节修正。",
+            },
         },
     }
     write_json(run_dir / "exam_brief.json", brief)
@@ -1867,8 +2114,7 @@ def make_exam_from_segments(
     exam_id = f"{exam_kind}-{run_id}-{stable_slug(mode, 4)}"
     source_topics = enrich_topics_with_brief(report.get("knowledge_map", {}).get("source_topics", []), brief)
     source_topics = apply_mistake_knowledge_policy(source_topics, brief)
-    title_seed = source.get("title") or source.get("input") or run_id
-    title = f"拷打式复盘单：{str(title_seed)[:42]}"
+    title = build_exam_title(source, source_topics, review_mode=normalize_review_mode((brief or {}).get("review_mode")), exam_kind=exam_kind)
     questions: list[dict[str, Any]] = []
     usable_segments = informative_segments(segments, limit=max(7, min(len(segments), 14)))
     if not usable_segments:
@@ -1936,6 +2182,8 @@ def make_exam_from_segments(
             "mix": summarize_question_mix(questions),
             "target_mix": question_mix_target(review_mode),
             "requires_agent_review": any(question.get("type") == "open" for question in questions),
+            "score_page_role": "成绩单只展示分数、题型表现、薄弱点和下一步，不展开长篇错题解析。",
+            "agent_report_role": "导出的报告包负责承载错题集、学习档案和 Agent 复盘材料。",
         },
         "scoring": {
             "objective": "front-end exact/normalized match for fill_blank, single_choice, multiple_choice, true_false",
@@ -2068,6 +2316,78 @@ def build_question_sections(questions: list[dict[str, Any]]) -> list[dict[str, A
     return sections
 
 
+def visible_question_texts(question: dict[str, Any]) -> list[tuple[str, str]]:
+    texts = [
+        ("prompt", str(question.get("prompt") or "")),
+        ("answer_hint", str(question.get("answer_hint") or "")),
+        ("explanation", str(question.get("explanation") or "")),
+        ("reference_answer", str(question.get("reference_answer") or "")),
+    ]
+    for option in question.get("options") or []:
+        texts.append((f"option {option.get('id', '?')}", str(option.get("text") or "")))
+    return [(label, text) for label, text in texts if text]
+
+
+def build_exam_title(
+    source: dict[str, Any],
+    source_topics: list[dict[str, Any]],
+    review_mode: str = "正常模式",
+    exam_kind: str = "daily",
+) -> str:
+    topic = infer_title_topic(source, source_topics)
+    if exam_kind == "weekly":
+        return "《本周学习内容综合测验》"
+    if exam_kind == "variant_review":
+        return f"《{topic}：薄弱点变种复习卷》"
+    if source.get("input_type") == "topic_research":
+        return f"《{topic}：核心概念理解测试》"
+    if review_mode in {"拷打模式", "深度拷打"}:
+        return f"《{topic}：从基础到应用测验》"
+    return f"《{topic}：核心概念理解测试》"
+
+
+def infer_title_topic(source: dict[str, Any], source_topics: list[dict[str, Any]]) -> str:
+    candidates = [
+        source.get("title"),
+        source.get("topic"),
+        source.get("input") if source.get("input_type") != "article_url" else "",
+    ]
+    for candidate in candidates:
+        cleaned = clean_title_topic(candidate)
+        if cleaned:
+            return cleaned
+    topic_names = [clean_title_topic(topic.get("name")) for topic in source_topics if isinstance(topic, dict)]
+    topic_names = [name for name in topic_names if name]
+    if topic_names:
+        return " 与 ".join(topic_names[:2])[:24]
+    return "本次学习内容"
+
+
+def clean_title_topic(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.match(r"https?://", text):
+        return ""
+    text = urllib.parse.unquote(text)
+    text = re.sub(r"[?].*$", "", text)
+    text = re.split(r"[/\\]", text)[-1]
+    text = re.sub(r"[.](txt|md|markdown|pdf|srt|vtt|mp3|mp4|mov|m4a|wav)$", "", text, flags=re.I)
+    text = re.sub(r"^(主题研究|拷打式复盘单|拷打复盘|复盘单)[:：\s]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" -_｜|")
+    if not text or text.lower() in {
+        "untitled",
+        "index",
+        "pasted-text",
+        "pasted text",
+        "manual_input",
+        "manual-transcript",
+        "manual_transcript",
+    }:
+        return ""
+    return text[:28]
+
+
 def enrich_topics_with_brief(source_topics: list[dict[str, Any]], brief: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not brief:
         return [dict(topic) for topic in source_topics]
@@ -2150,9 +2470,27 @@ def mask_topic_name(text: str, topic_name: str) -> str:
     return cleaned
 
 
+def visible_condition_safe_text(text: str) -> str:
+    cleaned = str(text or "")
+    replacements = [
+        ("根据材料选择", "依据可见条件选择"),
+        ("根据材料", "依据可见条件"),
+        ("符合材料", "符合题目条件"),
+        ("材料中的", "可见内容中的"),
+        ("材料里的", "可见内容里的"),
+        ("材料里", "可见内容里"),
+        ("材料对", "内容对"),
+        ("是否真的提供了材料", "是否真的给出对应内容"),
+        ("提供了材料", "给出对应内容"),
+    ]
+    for old, new in replacements:
+        cleaned = cleaned.replace(old, new)
+    return cleaned
+
+
 def plain_focus(text: str, topic_name: str) -> str:
     cleaned = mask_topic_name(text, topic_name)
-    return cleaned.rstrip("。；;，,")[:120]
+    return visible_condition_safe_text(cleaned.rstrip("。；;，,")[:120])
 
 
 def trim_sentence(text: str, limit: int = 110) -> str:
@@ -2166,16 +2504,16 @@ def fill_blank_description(focus: str, topic_name: str) -> str:
     masked = plain_focus(focus, topic_name)
     rough = re.sub(r"(这个概念|这个做法|这件事|第[一二三四五六七八九十]+[，,、]?)", "", masked).strip(" ，,。；;、")
     if len(rough) < 8:
-        return trim_sentence(focus, 140)
+        return visible_condition_safe_text(trim_sentence(focus, 140))
     return masked
 
 
 def single_choice_prompt(topic_name: str, index: int) -> str:
     patterns = [
-        f"关于「{topic_name}」，哪一项说法更符合材料？",
+        f"关于「{topic_name}」，哪一项说法更准确？",
         f"理解「{topic_name}」时，哪一项最不能省略？",
         f"把「{topic_name}」用到新场景前，应该先确认什么？",
-        f"哪一项更接近材料对「{topic_name}」的意思？",
+        f"哪一项更接近本次复盘对「{topic_name}」的要求？",
     ]
     return patterns[(index - 1) % len(patterns)]
 
@@ -2242,6 +2580,8 @@ def make_question(
         or f"只会复述「{kp_name}」这个词，却说不出机制和边界。"
     )
     transfer = knowledge_point.get("transfer_scenario") or knowledge_point.get("transfer_probe") or "换一个真实任务重新应用。"
+    boundary_visible = visible_condition_safe_text(trim_sentence(boundary))
+    misconception_visible = visible_condition_safe_text(trim_sentence(misconception, 140))
     base = {
         "id": f"q{index:02d}",
         "ability": ability,
@@ -2275,18 +2615,18 @@ def make_question(
         return {
             **base,
             "type": "fill_blank",
-            "prompt": f"材料里和这条描述对应的关键词或短语是什么？\n描述：{description}\n答案：____。",
+            "prompt": f"这条描述对应的关键词或短语是什么？\n描述：{description}\n答案：____。",
             "answer": [kp_name],
             "accepted_answers": [kp_name, focus],
-            "answer_hint": "填材料中的核心概念，不需要写长句。",
+            "answer_hint": "填本次复盘的核心概念，不需要写长句。",
             "explanation": f"这题检查你能不能把描述和核心概念对应起来：{kp_name}。",
         }
     if resolved_type == "single_choice":
         options, answer = distribute_choice_options(
             [
                 {"id": "A", "text": f"先说明「{focus_plain}」，再判断适用条件和边界。"},
-                {"id": "B", "text": f"只要材料里出现「{kp_name}」这个词，就说明已经掌握了。"},
-                {"id": "C", "text": f"把材料里的做法直接搬到所有新场景，不检查条件：{trim_sentence(boundary)}"},
+                {"id": "B", "text": f"只要见过「{kp_name}」这个词，就说明已经掌握了。"},
+                {"id": "C", "text": f"把这个做法直接搬到所有新场景，不检查条件：{boundary_visible}"},
                 {"id": "D", "text": "遇到反例或失败信号时先忽略，避免影响原结论。"},
             ],
             ["A"],
@@ -2298,15 +2638,15 @@ def make_question(
             "prompt": single_choice_prompt(kp_name, index),
             "options": options,
             "answer": answer,
-            "explanation": "正确理解需要同时看材料依据、适用条件和边界；只背名称或直接套用都会漏掉关键条件。",
+            "explanation": "正确理解需要同时看来源依据、适用条件和边界；只背名称或直接套用都会漏掉关键条件。",
         }
     if resolved_type == "multiple_choice":
         options, answer = distribute_choice_options(
             [
-                {"id": "A", "text": f"能用材料里的关键描述说明它为什么成立：{focus_plain}。"},
-                {"id": "B", "text": misconception},
-                {"id": "C", "text": f"如果应用失败，先检查这些条件：{trim_sentence(boundary)}"},
-                {"id": "D", "text": f"只要记住「{kp_name}」和一句材料原话，就不用解释机制。"},
+                {"id": "A", "text": f"能用关键描述说明它为什么成立：{focus_plain}。"},
+                {"id": "B", "text": misconception_visible},
+                {"id": "C", "text": f"如果应用失败，先检查这些条件：{boundary_visible}"},
+                {"id": "D", "text": f"只要记住「{kp_name}」和一句原话，就不用解释机制。"},
             ],
             ["B", "D"],
             index,
@@ -2352,7 +2692,7 @@ def make_question(
         "prompt": f"在「{scenario}」中，如何使用「{kp_name}」？\n{requirement}",
         "rubric": make_rubric(),
         "reference_answer": f"优秀答案应围绕「{focus}」说明机制、适用条件、边界、反例或风险，并能落到新场景：{transfer}",
-        "explanation": f"回答时要结合材料里的关键点：{trim_sentence(mechanism)} 同时说明边界：{trim_sentence(boundary)}",
+        "explanation": f"回答时要结合来源里的关键点：{trim_sentence(mechanism)} 同时说明边界：{trim_sentence(boundary)}",
     }
 
 
@@ -2542,10 +2882,12 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
                     "score": score,
                     "max_score": max_score,
                     "correct": correct,
+                    "user_answer": user_answer,
+                    "correct_answer": question.get("accepted_answers") or question.get("answer") or [],
                     "evidence": ["填空题按归一化关键词匹配。" if question["type"] == "fill_blank" else "客观题按选项精确匹配。"],
-                    "deduction_reason": "" if correct else "没有识别出核心概念、边界、反例或错误理解。",
+                    "deduction_reason": "" if correct else objective_deduction_reason(question),
                     "mistake_tag": "" if correct else pick_mistake_tag(question),
-                    "improvement": "" if correct else "回到材料来源，写出该知识点成立的条件和不成立的场景。",
+                    "improvement": "" if correct else next_time_hint(question.get("knowledge_point", {}), question),
                     "learn_from": learning_target(question),
                 }
             )
@@ -2561,6 +2903,8 @@ def grade_attempt(exam: dict[str, Any], attempt: dict[str, Any], learner_id: str
                     "max_score": max_score,
                     "score_status": "pending_agent_review",
                     "rubric_level": None,
+                    "user_answer": user_answer,
+                    "correct_answer": question.get("reference_answer") or question.get("answer") or "",
                     "evidence": evidence,
                     "deduction_reason": "开放题未做最终评分；本地只做预检提示，必须由 Agent 按 rubric 复核。",
                     "mistake_tag": "",
@@ -2674,6 +3018,25 @@ def pick_mistake_tag(question: dict[str, Any], user_answer: str = "", level: int
     if "证据" not in user_answer:
         return "evidence_missing"
     return "application_gap"
+
+
+def objective_deduction_reason(question: dict[str, Any]) -> str:
+    kp_name = question.get("knowledge_point", {}).get("name") or "这个知识点"
+    ability = question.get("ability")
+    qtype = question.get("type")
+    if qtype == "fill_blank":
+        return f"这题考的是能否把描述对回「{kp_name}」这个核心概念；答错说明概念定位还不稳。"
+    if qtype == "multiple_choice":
+        return f"这题要求识别关于「{kp_name}」的错误理解；漏选或误选通常说明机制、边界和误解风险还混在一起。"
+    if qtype == "true_false":
+        return f"这题要求判断「{kp_name}」相关说法是否成立；答错多半是没有先检查条件和失败信号。"
+    if ability == "边界识别":
+        return f"这题的关键不是背「{kp_name}」的定义，而是看它在什么条件下成立、什么时候会失效。"
+    if ability == "迁移应用":
+        return f"这题检查能不能把「{kp_name}」换到新场景；答错说明直接套用多于条件判断。"
+    if ability == "错误理解识别":
+        return f"这题要抓住关于「{kp_name}」的常见误解；答错说明容易被听起来顺的说法带跑。"
+    return f"这题要求抓住「{kp_name}」的机制、条件和边界；当前答案没有命中最关键的判断点。"
 
 
 def summarize_wrong_reasons(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -2828,6 +3191,11 @@ def make_mistake_entry(
     question: dict[str, Any],
 ) -> dict[str, Any]:
     prompt = question.get("prompt", "")
+    kp = question.get("knowledge_point", {"id": "unknown", "name": "unknown"})
+    question_type = question.get("type", "unknown")
+    answer_text = format_answer_for_record(question, result.get("user_answer"))
+    correct_text = format_answer_for_record(question, result.get("correct_answer"), correct=True)
+    knowledge_explanation = question.get("explanation", "") or objective_deduction_reason(question)
     return {
         "entry_id": f"mistake-{stable_slug(learner_id + grade_payload.get('exam_id', '') + result.get('question_id', '') + iso_now(), 12)}",
         "created_at": iso_now(),
@@ -2835,18 +3203,83 @@ def make_mistake_entry(
         "run_id": grade_payload.get("run_id"),
         "exam_id": grade_payload.get("exam_id"),
         "question_id": result.get("question_id"),
-        "knowledge_point": question.get("knowledge_point", {"id": "unknown", "name": "unknown"}),
+        "question_title": mistake_question_title(question),
+        "knowledge_point": kp,
         "ability": question.get("ability", "unknown"),
         "mistake_tag": result.get("mistake_tag") or "unknown",
+        "mistake_label": MISTAKE_TAG_LABELS.get(result.get("mistake_tag") or "unknown", "未分类错因"),
         "score": result.get("score"),
         "max_score": result.get("max_score"),
         "source": question.get("source", {}),
+        "original_question": prompt,
+        "question_type": question_type,
+        "question_type_label": QUESTION_TYPE_LABELS.get(question_type, question_type),
+        "user_answer": answer_text,
+        "raw_user_answer": result.get("user_answer"),
+        "correct_answer": correct_text,
+        "raw_correct_answer": result.get("correct_answer"),
+        "error_reason": result.get("deduction_reason", ""),
+        "explanation": knowledge_explanation,
+        "knowledge_explanation": knowledge_explanation,
+        "plain_language_explanation": plain_language_explanation(kp, result, question),
+        "next_time_hint": next_time_hint(kp, question),
         "original_prompt_hash": stable_slug(prompt, 16),
         "original_scenario": extract_scenario(prompt),
         "evidence": result.get("evidence", []),
         "deduction_reason": result.get("deduction_reason", ""),
         "review_status": "active",
     }
+
+
+def mistake_question_title(question: dict[str, Any]) -> str:
+    kp_name = question.get("knowledge_point", {}).get("name") or "这个知识点"
+    qtype = QUESTION_TYPE_LABELS.get(question.get("type"), question.get("type", "题目"))
+    ability = question.get("ability") or "理解检查"
+    return f"{kp_name} · {ability} · {qtype}"
+
+
+def format_answer_for_record(question: dict[str, Any], answer: Any, correct: bool = False) -> str:
+    if answer is None or answer == "":
+        return "未作答" if not correct else ""
+    qtype = question.get("type")
+    if qtype == "open":
+        return str(answer)
+    if qtype == "fill_blank":
+        values = answer if isinstance(answer, list) else [answer]
+        values = [str(item) for item in values if str(item)]
+        return " / ".join(values) if values else ("未作答" if not correct else "")
+    values = answer if isinstance(answer, list) else [answer]
+    option_by_id = {option.get("id"): option.get("text", "") for option in question.get("options") or []}
+    rendered = []
+    for item in values:
+        text = option_by_id.get(item)
+        rendered.append(f"{item}. {text}" if text else str(item))
+    return "；".join(rendered) if rendered else ("未作答" if not correct else "")
+
+
+def plain_language_explanation(knowledge_point: dict[str, Any], result: dict[str, Any], question: dict[str, Any] | None = None) -> str:
+    name = knowledge_point.get("name") or "这个知识点"
+    reason = result.get("deduction_reason") or "这题没有拿满分。"
+    ability = (question or {}).get("ability", "")
+    if ability == "边界识别":
+        return f"这题不是在问你记不记得「{name}」，而是在问你知不知道它什么时候会失效。先把适用条件说出来，再看选项。{reason}"
+    if ability == "错误理解识别":
+        return f"这题容易被说得很顺的错误解释骗过去。判断「{name}」时，先找它有没有跳过机制、边界或反例。{reason}"
+    if ability == "迁移应用":
+        return f"这题考的是换场景后还能不能用「{name}」。不要直接搬答案，先检查新场景的条件有没有变。{reason}"
+    return f"这题卡住的地方在「{name}」。先别急着背答案，先把它为什么成立、什么时候不成立说清楚。{reason}"
+
+
+def next_time_hint(knowledge_point: dict[str, Any], question: dict[str, Any] | None = None) -> str:
+    name = knowledge_point.get("name") or "这个知识点"
+    qtype = (question or {}).get("type")
+    if qtype == "multiple_choice":
+        return f"下次遇到「{name}」多选题，逐项问：这句话有没有偷换概念、跳过条件、把案例当通用规律。"
+    if qtype == "true_false":
+        return f"下次遇到「{name}」判断题，先找绝对化表达，再问它的成立条件和失败条件。"
+    if qtype == "fill_blank":
+        return f"下次遇到「{name}」填空题，先把描述里的机制词和边界词圈出来，再对应核心概念。"
+    return f"下次遇到「{name}」相关题，先问自己：题目要我判断的是定义、机制、边界，还是迁移场景。"
 
 
 def extract_scenario(prompt: str) -> str:
@@ -2891,7 +3324,11 @@ def make_variant_exam(
         "exam_id": exam_id,
         "exam_kind": exam_kind,
         "learner_id": learner_id,
-        "title": "拷打式复盘：薄弱点变种挑战卷",
+        "title": build_exam_title(
+            {"input_type": "mistake_bank"},
+            [m.get("knowledge_point", {}) for m in mistakes],
+            exam_kind="variant_review",
+        ),
         "mode": "有趣拷打模式",
         "created_at": iso_now(),
         "material_source": {"input": "mistake_bank", "input_type": "local_memory"},
@@ -3195,7 +3632,7 @@ def make_weekly_exam(
         "exam_kind": "weekly",
         "learner_id": learner_id,
         "run_id": f"weekly-{week_id}",
-        "title": f"本周综合拷问卷：{week_id}",
+        "title": build_exam_title({"input_type": "local_memory"}, [], exam_kind="weekly"),
         "mode": "混合风格",
         "review_mode": "正常模式",
         "duration_minutes": 10,
@@ -3357,6 +3794,66 @@ def load_learner_archive_sessions(learner_id: str, dashboard_dir: Path) -> list[
     return sorted(sessions, key=lambda row: row.get("archived_at", ""), reverse=True)
 
 
+def generated_review_summary(review_dir: Path, dashboard_dir: Path) -> dict[str, Any]:
+    exam = read_json_if_exists(review_dir / "exam.json") or {}
+    links = {}
+    for key, filename in [("review_html", "review.html"), ("exam_json", "exam.json"), ("grading_prompt", "grading_prompt.md")]:
+        path = review_dir / filename
+        if path.exists():
+            links[key] = dashboard_link(path, dashboard_dir)
+    return {
+        "id": review_dir.name,
+        "created_at": exam.get("created_at") or review_dir.name,
+        "title": exam.get("title") or "薄弱点变种复习卷",
+        "question_count": len(exam.get("questions", [])),
+        "review_mode": exam.get("review_mode") or exam.get("exam_kind") or "variant_review",
+        "links": links,
+    }
+
+
+def load_generated_reviews(learner_id: str, dashboard_dir: Path) -> list[dict[str, Any]]:
+    review_root = data_dir() / "learners" / learner_id / "review"
+    if not review_root.exists():
+        return []
+    reviews = [
+        generated_review_summary(path, dashboard_dir)
+        for path in sorted(review_root.iterdir())
+        if path.is_dir()
+    ]
+    return sorted(reviews, key=lambda row: row.get("created_at", ""), reverse=True)
+
+
+def weekly_session_summary(weekly_dir: Path, dashboard_dir: Path) -> dict[str, Any]:
+    exam = read_json_if_exists(weekly_dir / "weekly_exam.json") or {}
+    links = {}
+    for key, filename in [("weekly_html", "weekly_exam.html"), ("weekly_json", "weekly_exam.json"), ("analysis", "analysis.md")]:
+        path = weekly_dir / filename
+        if path.exists():
+            links[key] = dashboard_link(path, dashboard_dir)
+    mix = (exam.get("exam_brief") or {}).get("weekly_mix") or {}
+    return {
+        "id": weekly_dir.name,
+        "created_at": exam.get("created_at") or weekly_dir.name,
+        "title": exam.get("title") or "本周学习内容综合测验",
+        "question_count": len(exam.get("questions", [])),
+        "archive_count": mix.get("archive_count", 0),
+        "downgraded": bool(mix.get("downgraded")),
+        "links": links,
+    }
+
+
+def load_weekly_sessions(learner_id: str, dashboard_dir: Path) -> list[dict[str, Any]]:
+    weekly_root = data_dir() / "learners" / learner_id / "weekly"
+    if not weekly_root.exists():
+        return []
+    weeks = [
+        weekly_session_summary(path, dashboard_dir)
+        for path in sorted(weekly_root.iterdir())
+        if path.is_dir()
+    ]
+    return sorted(weeks, key=lambda row: row.get("created_at", ""), reverse=True)
+
+
 def load_learner_mistakes(learner_id: str) -> list[dict[str, Any]]:
     bank_path = data_dir() / "learners" / learner_id / "mistake_bank.jsonl"
     return read_jsonl(bank_path)
@@ -3397,6 +3894,8 @@ def build_learner_dashboard(learner_id: str) -> dict[str, Any]:
     learner_dir = ensure_dir(data_dir() / "learners" / learner_id)
     dashboard_dir = ensure_dir(learner_dir / "dashboard")
     sessions = load_learner_archive_sessions(learner_id, dashboard_dir)
+    generated_reviews = load_generated_reviews(learner_id, dashboard_dir)
+    weekly_sessions = load_weekly_sessions(learner_id, dashboard_dir)
     mistakes = load_learner_mistakes(learner_id)
     active_mistakes = [row for row in mistakes if row.get("review_status", "active") == "active"]
     answered = sum(row["answered"] for row in sessions)
@@ -3413,6 +3912,8 @@ def build_learner_dashboard(learner_id: str) -> dict[str, Any]:
         "dashboard_dir": dashboard_dir,
         "generated_at": iso_now(),
         "sessions": sessions,
+        "generated_reviews": generated_reviews,
+        "weekly_sessions": weekly_sessions,
         "mistakes": mistakes,
         "active_mistakes": active_mistakes,
         "note_clusters": build_note_clusters(mistakes),
@@ -3424,6 +3925,8 @@ def build_learner_dashboard(learner_id: str) -> dict[str, Any]:
             "accuracy": round((correct / answered * 100) if answered else 0, 1),
             "active_mistakes": len(active_mistakes),
             "learned_topics": len(topic_counts),
+            "generated_reviews": len(generated_reviews),
+            "weekly_reviews": len(weekly_sessions),
         },
         "top_topics": topic_counts.most_common(12),
         "top_weak_points": weak_counts.most_common(10),
@@ -3508,7 +4011,7 @@ def dashboard_layout(title: str, active: str, data: dict[str, Any], body: str) -
         ("index.html", "总看板", "index"),
         ("exams.html", "考卷集合", "exams"),
         ("mistakes.html", "错题集", "mistakes"),
-        ("notes.html", "错题笔记", "notes"),
+        ("notes.html", "复盘建议", "notes"),
     ]
     nav_html = "\n".join(
         f'<a class="{"active" if key == active else ""}" href="{href}">{label}</a>'
@@ -3576,6 +4079,78 @@ def render_exam_table(sessions: list[dict[str, Any]]) -> str:
     )
 
 
+def render_review_table(reviews: list[dict[str, Any]]) -> str:
+    if not reviews:
+        return '<p class="empty">暂无变体复习卷。运行 review 后，这里会列出薄弱点变种复习。</p>'
+    rows = []
+    for review in reviews:
+        link_parts = []
+        labels = {
+            "review_html": "打开复习卷",
+            "exam_json": "exam.json",
+            "grading_prompt": "grading_prompt.md",
+        }
+        for key, label in labels.items():
+            if key in review["links"]:
+                link_parts.append(f'<a href="{html_text(review["links"][key])}">{label}</a>')
+        link_cell = " · ".join(link_parts) or '<span class="empty">无文件</span>'
+        rows.append(
+            "<tr>"
+            f"<td>{html_text(review['created_at'])}</td>"
+            f"<td><strong>{html_text(review['title'])}</strong><br><code>{html_text(review['id'])}</code></td>"
+            f"<td>{review['question_count']} 题</td>"
+            f"<td>{link_cell}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr><th>时间</th><th>复习卷</th><th>题量</th><th>文件</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def render_weekly_table(weeks: list[dict[str, Any]]) -> str:
+    if not weeks:
+        return '<p class="empty">暂无周复盘。运行 weekly 后，这里会列出周度综合复盘。</p>'
+    rows = []
+    for week in weeks:
+        link_parts = []
+        labels = {
+            "weekly_html": "打开周复盘",
+            "weekly_json": "weekly_exam.json",
+            "analysis": "analysis.md",
+        }
+        for key, label in labels.items():
+            if key in week["links"]:
+                link_parts.append(f'<a href="{html_text(week["links"][key])}">{label}</a>')
+        link_cell = " · ".join(link_parts) or '<span class="empty">无文件</span>'
+        status = "降级错题变种" if week["downgraded"] else "跨材料综合"
+        rows.append(
+            "<tr>"
+            f"<td>{html_text(week['created_at'])}</td>"
+            f"<td><strong>{html_text(week['title'])}</strong><br><code>{html_text(week['id'])}</code></td>"
+            f"<td>{week['question_count']} 题<br>{html_text(status)} · archive {week['archive_count']}</td>"
+            f"<td>{link_cell}</td>"
+            "</tr>"
+        )
+    return (
+        "<table><thead><tr><th>时间</th><th>周复盘</th><th>状态</th><th>文件</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+
+
+def dashboard_status_sentence(data: dict[str, Any]) -> str:
+    stats = data["stats"]
+    if not stats["completed_reviews"]:
+        return "还没有完成归档复盘。先完成一次 exam.html，导出报告给 Agent，运行 grade-report 和 record。"
+    if stats["active_mistakes"] and not stats["generated_reviews"]:
+        return "已经有活跃错题，但还没有生成变体复习。建议运行 review，把薄弱点换场景再考一次。"
+    if stats["generated_reviews"] and not stats["weekly_reviews"]:
+        return "已经生成过变体复习，但还没有周复盘。积累几次复盘后运行 weekly，看跨材料共同弱点。"
+    if stats["active_mistakes"]:
+        return "复盘、错题、变体复习和周复盘链路都已形成；下一步优先处理活跃错题。"
+    return "当前没有活跃错题，可以提高模式强度或加入历史错题做迁移复盘。"
+
+
 def render_dashboard_index(data: dict[str, Any]) -> str:
     stats = data["stats"]
     cards = [
@@ -3585,6 +4160,8 @@ def render_dashboard_index(data: dict[str, Any]) -> str:
         ("答错", stats["wrong"]),
         ("正确率", f"{stats['accuracy']}%"),
         ("活跃错题", stats["active_mistakes"]),
+        ("变体复习", stats["generated_reviews"]),
+        ("周复盘", stats["weekly_reviews"]),
     ]
     card_html = "".join(
         f'<div class="card"><strong>{html_text(value)}</strong><span>{label}</span></div>'
@@ -3597,8 +4174,16 @@ def render_dashboard_index(data: dict[str, Any]) -> str:
     )
     body = f"""
     <section class="grid">{card_html}</section>
+    <h2>当前状态</h2>
+    <section class="section">
+      <p>{html_text(dashboard_status_sentence(data))}</p>
+    </section>
     <h2>最近考卷</h2>
     {recent}
+    <h2>最近变体复习</h2>
+    {render_review_table(data["generated_reviews"][:3])}
+    <h2>最近周复盘</h2>
+    {render_weekly_table(data["weekly_sessions"][:3])}
     <h2>高频薄弱点</h2>
     <section class="section">{render_count_list(data["top_weak_points"], "目前没有活跃错题。")}</section>
     <h2>目前学了什么</h2>
@@ -3608,7 +4193,12 @@ def render_dashboard_index(data: dict[str, Any]) -> str:
 
 
 def render_dashboard_exams(data: dict[str, Any]) -> str:
-    return dashboard_layout("考卷集合", "exams", data, f"<h2>考卷集合</h2>{render_exam_table(data['sessions'])}")
+    body = (
+        f"<h2>正式复盘记录</h2>{render_exam_table(data['sessions'])}"
+        f"<h2>变体复习记录</h2>{render_review_table(data['generated_reviews'])}"
+        f"<h2>周复盘记录</h2>{render_weekly_table(data['weekly_sessions'])}"
+    )
+    return dashboard_layout("考卷集合", "exams", data, body)
 
 
 def render_dashboard_mistakes(data: dict[str, Any]) -> str:
@@ -3644,8 +4234,8 @@ def render_dashboard_mistakes(data: dict[str, Any]) -> str:
 def render_dashboard_notes(data: dict[str, Any]) -> str:
     clusters = data["note_clusters"]
     if not clusters:
-        body = '<h2>错题笔记</h2><section class="section"><p class="empty">暂无错题笔记。错题积累后会自动生成大白话草稿。</p></section>'
-        return dashboard_layout("错题笔记", "notes", data, body)
+        body = '<h2>复盘建议</h2><section class="section"><p class="empty">暂无复盘建议。错题积累后，这里会按知识点给出下一步。</p></section>'
+        return dashboard_layout("复盘建议", "notes", data, body)
     sections = []
     for cluster in clusters:
         evidence = cluster["evidence"]
@@ -3659,16 +4249,16 @@ def render_dashboard_notes(data: dict[str, Any]) -> str:
             f"<p><strong>证据：</strong>{html_text(evidence_text)}</p>"
             "</section>"
         )
-    return dashboard_layout("错题笔记", "notes", data, "<h2>错题笔记</h2>" + "".join(sections))
+    return dashboard_layout("复盘建议", "notes", data, "<h2>复盘建议</h2>" + "".join(sections))
 
 
 def render_notes_agent_pack(data: dict[str, Any]) -> str:
     lines = [
-        "# 错题笔记 Agent 精修包",
+        "# 错题复盘 Agent 精修包",
         "",
         "## Agent 精修说明",
         "",
-        "请把这些草稿改写成像我自己写的复盘笔记：大白话、短句、能直接复习，不要写成老师讲义。",
+        "请把这些草稿改写成像懂的人在陪我复盘：大白话、短句、能直接复习，不要写成老师讲义。",
         "不要新增没有出现在错题、证据、grade 或 source 里的事实。",
         "",
         f"- learner_id: {data['learner_id']}",
@@ -3751,10 +4341,14 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
             for field in ["id", "type", "prompt", "knowledge_point", "source"]:
                 if field not in question:
                     issues.append(f"{question.get('id', '?')} missing {field}")
-            prompt = question.get("prompt", "")
-            for pattern in BAD_VISIBLE_PROMPT_PATTERNS:
-                if pattern in prompt:
-                    issues.append(f"{question.get('id', '?')} prompt contains banned visible pattern: {pattern}")
+            for label, text in visible_question_texts(question):
+                for pattern in BAD_VISIBLE_PROMPT_PATTERNS:
+                    if pattern in text:
+                        issues.append(f"{question.get('id', '?')} {label} contains banned visible pattern: {pattern}")
+                if label == "prompt" or label == "answer_hint" or label.startswith("option "):
+                    for pattern in BAD_VISIBLE_CONDITION_PATTERNS:
+                        if pattern in text:
+                            issues.append(f"{question.get('id', '?')} {label} implies missing visible material context: {pattern}")
             if question.get("type") in {"fill_blank", "single_choice", "multiple_choice", "true_false"} and "answer" not in question:
                 issues.append(f"{question.get('id')} objective question missing answer")
             if question.get("type") == "open" and "rubric" not in question:
@@ -3918,7 +4512,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=10)
     p.set_defaults(func=review)
 
-    p = sub.add_parser("weekly", help="生成本周综合拷问卷")
+    p = sub.add_parser("weekly", help="生成本周学习内容综合测验")
     p.add_argument("learner_id")
     p.add_argument("--since", default="7d")
     p.set_defaults(func=weekly)

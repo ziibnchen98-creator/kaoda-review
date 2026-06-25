@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>拷打式复盘单</title>
+  <title>核心概念理解测试</title>
   <style>
     :root {
       color-scheme: light;
@@ -546,7 +546,7 @@
       <main class="win-body">
         <header class="app-header">
           <div class="header-copy">
-            <h1 id="title">拷打式复盘单</h1>
+            <h1 id="title">核心概念理解测试</h1>
             <div class="meta" id="meta"></div>
           </div>
           <aside class="system-panel" aria-label="复盘状态">
@@ -596,7 +596,7 @@
       open: "简答/口述题"
     };
     const TYPE_ORDER = ["single_choice", "multiple_choice", "true_false", "fill_blank", "open"];
-    const AGENT_EXPORT_INSTRUCTION = "请使用 kaoda-review 读取本报告中的 attempt.json 和 exam.json：先对客观题复核，对简答/口述题按 rubric 二次评分，生成 grade.json，然后执行 record 归档错题、错因和本次试卷。";
+    const AGENT_EXPORT_INSTRUCTION = "请使用 kaoda-review 读取本报告中的 attempt.json、exam.json 和错题集：先复核客观题，对简答/口述题按 rubric 二次评分，生成 grade.json，然后执行 record 归档错题、错因和本次试卷。";
 
     function typeLabel(type) {
       return TYPE_LABELS[type] || type || "题目";
@@ -623,7 +623,7 @@
     }
 
     function render() {
-      $("title").textContent = exam.title || "拷打式复盘单";
+      $("title").textContent = exam.title || "核心概念理解测试";
       $("meta").innerHTML = [
         ["模式", exam.review_mode || exam.mode],
         ["题目风格", exam.question_style],
@@ -721,7 +721,7 @@
     }
 
     function submit() {
-      if (!window.confirm("确认交卷后会生成学习报告，是否提交？")) return;
+      if (!window.confirm("确认交卷后会生成成绩单，是否提交？")) return;
       const answers = collectAnswers();
       let score = 0;
       let total = 0;
@@ -786,11 +786,11 @@
     function nextStepHtml() {
       if (hasOpenQuestions()) {
         return `
-          <p>这份复盘含简答/口述题，当前分数是客观题预评分。点击 <strong>导出报告给 Agent</strong>，Agent 会继续评简答/口述、生成最终分数，并把错题写入错题集。</p>
+          <p>这份复盘含简答/口述题，当前分数是客观题预评分。点击 <strong>导出报告给 Agent</strong>，Agent 会继续评简答/口述、整理错题集，并生成最终分数。</p>
         `;
       }
       return `
-        <p>本页已完成客观题评分。点击 <strong>导出报告给 Agent</strong> 后，Agent 可以复核分数、记录错题并归档本次试卷。</p>
+        <p>本页只保留成绩反馈。点击 <strong>导出报告给 Agent</strong> 后，Agent 可以拿到完整错题集、复核分数并归档本次试卷。</p>
       `;
     }
 
@@ -818,7 +818,7 @@
       const percent = scorePercent(objective.score, objective.total);
       const mistakeRows = mistakes.length
         ? `<ul class="wrong-list">${mistakes.map(q => `
-            <li><strong>${escapeHtml(q.id)} · ${escapeHtml(q.knowledge_point ? q.knowledge_point.name : "")}</strong><br>${escapeHtml(q.prompt)}</li>
+            <li><strong>${escapeHtml(q.id)} · ${escapeHtml(q.knowledge_point ? q.knowledge_point.name : "")}</strong><br>${escapeHtml(typeLabel(q.type))} · 详细原题和解析已放入 Agent 报告包。</li>
           `).join("")}</ul>`
         : "<p>客观题没有错漏。</p>";
       const weakRows = weak.length
@@ -840,7 +840,7 @@
             </div>
           </div>
           <div class="poster-summary">
-            <h2>学习报告</h2>
+            <h2>成绩单</h2>
             <p>${escapeHtml(performanceText(percent, mistakes, openCount))}</p>
             <p>错题：${mistakes.length} 题</p>
             ${openCount ? `<p>待 Agent 复核：${openCount} 道简答/口述题</p>` : "<p>本次已在网页内完成评分。</p>"}
@@ -850,7 +850,7 @@
         <div class="report-grid">${typeScoreCards()}</div>
         <h2>题型构成</h2>
         <div class="report-grid">${typeTotalRows}</div>
-        <h2>错题</h2>
+        <h2>错题概览</h2>
         ${mistakeRows}
         <h2>薄弱知识点</h2>
         ${weakRows}
@@ -872,6 +872,71 @@
       };
     }
 
+    function optionTextById(q, id) {
+      const option = (q.options || []).find(item => item.id === id);
+      return option ? `${option.id}. ${option.text}` : String(id || "");
+    }
+
+    function formatAnswerForReport(q, value) {
+      if (q.type === "fill_blank" || q.type === "open") return String(value || "");
+      const values = Array.isArray(value) ? value : (value ? [value] : []);
+      return values.length ? values.map(id => optionTextById(q, id)).join("；") : "未作答";
+    }
+
+    function formatCorrectAnswerForReport(q) {
+      if (q.type === "fill_blank") return (q.accepted_answers || q.answer || []).join(" / ");
+      if (q.type === "open") return q.reference_answer || q.explanation || "";
+      return (q.answer || []).map(id => optionTextById(q, id)).join("；");
+    }
+
+    function questionTitleForReport(q) {
+      const kp = q.knowledge_point && q.knowledge_point.name ? q.knowledge_point.name : "未命名知识点";
+      const ability = q.ability || "理解检查";
+      return `${kp} · ${ability} · ${typeLabel(q.type)}`;
+    }
+
+    function mistakeLabelForQuestion(q) {
+      const ability = q.ability || "";
+      if (ability === "为什么追问") return "机制缺失";
+      if (ability === "边界识别") return "边界盲区";
+      if (ability === "迁移应用") return "迁移误用";
+      if (ability === "反例判断") return "反例盲区";
+      if (ability === "错误理解识别") return "概念混淆";
+      return "证据不足";
+    }
+
+    function wrongReasonForReport(q) {
+      const kp = q.knowledge_point && q.knowledge_point.name ? q.knowledge_point.name : "这个知识点";
+      if (q.type === "fill_blank") return `这题考的是能否把描述对回「${kp}」这个核心概念；答错说明概念定位还不稳。`;
+      if (q.type === "multiple_choice") return `这题要求识别关于「${kp}」的错误理解；漏选或误选通常说明机制、边界和误解风险还混在一起。`;
+      if (q.type === "true_false") return `这题要求判断「${kp}」相关说法是否成立；答错多半是没有先检查条件和失败信号。`;
+      if (q.ability === "边界识别") return `这题的关键不是背「${kp}」的定义，而是看它在什么条件下成立、什么时候会失效。`;
+      if (q.ability === "迁移应用") return `这题检查能不能把「${kp}」换到新场景；答错说明直接套用多于条件判断。`;
+      if (q.ability === "错误理解识别") return `这题要抓住关于「${kp}」的常见误解；答错说明容易被听起来顺的说法带跑。`;
+      return `这题要求抓住「${kp}」的机制、条件和边界；当前答案没有命中最关键的判断点。`;
+    }
+
+    function plainExplanationForReport(q) {
+      const kp = q.knowledge_point && q.knowledge_point.name ? q.knowledge_point.name : "这个知识点";
+      if (q.ability === "边界识别") return `这题不是在问你记不记得「${kp}」，而是在问你知不知道它什么时候会失效。先把适用条件说出来，再看选项。`;
+      if (q.ability === "错误理解识别") return `这题容易被说得很顺的错误解释骗过去。判断「${kp}」时，先找它有没有跳过机制、边界或反例。`;
+      if (q.ability === "迁移应用") return `这题考的是换场景后还能不能用「${kp}」。不要直接搬答案，先检查新场景的条件有没有变。`;
+      return `这题卡住的不是选项编号，而是「${kp}」背后的机制、条件和边界没有同时抓住。`;
+    }
+
+    function nextHintForReport(q) {
+      const kp = q.knowledge_point && q.knowledge_point.name ? q.knowledge_point.name : "这个知识点";
+      if (q.type === "multiple_choice") return `下次遇到「${kp}」多选题，逐项问：这句话有没有偷换概念、跳过条件、把案例当通用规律。`;
+      if (q.type === "true_false") return `下次遇到「${kp}」判断题，先找绝对化表达，再问它的成立条件和失败条件。`;
+      if (q.type === "fill_blank") return `下次遇到「${kp}」填空题，先把描述里的机制词和边界词圈出来，再对应核心概念。`;
+      return `下次遇到「${kp}」相关题，先问自己：题目要我判断的是定义、机制、边界，还是迁移场景。`;
+    }
+
+    function sourceSummaryForReport() {
+      const src = exam.material_source || {};
+      return src.title || src.input || exam.run_id || "未命名来源";
+    }
+
     function agentReportMarkdown() {
       const attempt = buildAttempt();
       const objective = state.objective || { score: 0, total: 0, by_type: {} };
@@ -885,6 +950,7 @@
       const mistakes = state.mistakes || [];
       const weak = weakKnowledgeList(mistakes);
       const openCount = exam.questions.filter(q => q.type === "open").length;
+      const answers = attempt.answers || {};
       return [
         `# kaoda-review Agent 报告包`,
         "",
@@ -900,7 +966,7 @@
         "",
         "记录时需要把错题、错因、试卷、答案和评分结果归档到 learner 的错题集与 archive。",
         "",
-        "## 学习报告摘要",
+        "## 成绩单摘要",
         "",
         `- title: ${exam.title}`,
         `- learner_id: ${attempt.learner_id}`,
@@ -912,12 +978,32 @@
         "## 题型得分",
         ...(typeLines.length ? typeLines : ["- not completed"]),
         "",
-        "## 错题",
+        "## 学习档案",
+        "",
+        `- 本次考试主题：${exam.title}`,
+        `- 考试来源：${sourceSummaryForReport()}`,
+        `- 出题范围：${exam.questions.length} 个检查点，覆盖 ${questionSections().map(section => section.label).join("、")}`,
+        `- 错误集中知识点：${weak.length ? weak.map(([name, count]) => `${name}(${count})`).join("、") : "暂无明显集中错误"}`,
+        `- 建议 Agent 重点讲解：${mistakes.length ? "优先讲错题集里的错误原因、知识解读、大白话解释和下次判断方法。" : "本次客观题没有错漏，可提高题目强度或加入历史错题。"}`,
+        `- 下一轮变种依据：保留错题的知识点、错因标签、原题、我的答案和正确答案，生成同知识点不同场景题。`,
+        "",
+        "## 错题集",
         ...(mistakes.length
           ? mistakes.flatMap(q => [
-              `- ${q.id} ${q.knowledge_point ? q.knowledge_point.name : ""}`,
-              `  - 题目：${q.prompt}`,
-              `  - 解析：${q.explanation || ""}`
+              `### ${q.id} ${questionTitleForReport(q)}`,
+              "",
+              `- 题目标题：${questionTitleForReport(q)}`,
+              `- 题型：${typeLabel(q.type)}`,
+              `- 考察知识点：${q.knowledge_point ? q.knowledge_point.name : "未命名知识点"}`,
+              `- 错因标签：${mistakeLabelForQuestion(q)}`,
+              `- 原题：${q.prompt}`,
+              `- 我的答案：${formatAnswerForReport(q, answers[q.id])}`,
+              `- 正确答案 / 参考答案：${formatCorrectAnswerForReport(q)}`,
+              `- 错误原因：${wrongReasonForReport(q)}`,
+              `- 知识解读：${q.explanation || ""}`,
+              `- 大白话解释：${plainExplanationForReport(q)}`,
+              `- 下次遇到类似题怎么判断：${nextHintForReport(q)}`,
+              ""
             ])
           : ["- 客观题没有错漏。"]),
         "",

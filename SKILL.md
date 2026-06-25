@@ -25,6 +25,8 @@ Default output is a low-stakes review checklist, not a formal exam. The default 
 
 ## Workflow
 
+When this repository is installed as a Python package, the equivalent CLI command is `kaoda-review`. Inside a cloned skill directory, prefer the explicit source command shown below: `python scripts/kaoda.py ...`.
+
 1. If the user provides a concrete material, run `python scripts/kaoda.py ingest <input>` to create `data/runs/<run_id>/segments.jsonl`.
    - If ingest returns `status: needs_text`, explain the extraction issue plainly, help the user provide text in `manual_input.txt` or `manual_transcript.txt`, then run `python scripts/kaoda.py ingest-manual <run_id>`.
 2. If the user only gives a title or topic, run `python scripts/kaoda.py research-topic "<topic>"`, perform focused research, write `topic_research.md` and `source_links.json`, then run `python scripts/kaoda.py ingest-topic <run_id>`.
@@ -41,7 +43,7 @@ Default output is a low-stakes review checklist, not a formal exam. The default 
 13. Read the exported `kaoda_agent_report.md`; it contains `attempt.json`, `exam.json`, objective pregrade, answers, and instructions for agent scoring/recording. Run `python scripts/kaoda.py grade-report <kaoda_agent_report.md> --learner-id <id>` to generate `attempt.json`, `exam.json`, `grading_prompt.md`, and `grade.json`.
 14. If `grade.json.open_review.status` is `pending_agent_review`, use `agent_open_review.md` to rubric-score short/oral answers, then set `open_review.status` to `completed`, set every open result `score_status` to `completed` or remove it, and update open-question scores/evidence before recording.
 15. Run `python scripts/kaoda.py record <grade.json>` to append mistakes and archive the full exam/attempt/grade/HTML plus source/material/deep-research files under `data/learners/<id>/archive/`. `record` refuses pending open-answer pregrades.
-16. Run `python scripts/kaoda.py dashboard <id>` to refresh the static learner hub: total score board, exam collection, wrong-question board, and plain-language notes.
+16. Run `python scripts/kaoda.py dashboard <id>` to refresh the static learner hub: total score board, formal exam collection, generated variant reviews, weekly syntheses, wrong-question board, and plain-language review advice.
 17. Run `python scripts/kaoda.py review <id>` for variant review or `python scripts/kaoda.py weekly <id> --since 7d` for the weekly synthesis exam.
 
 ## Research-First Choice Gate
@@ -63,11 +65,14 @@ Questions must read like a clear review sheet, not like an agent exposing its pr
 - Keep source layer, style family, ability type, and difficulty as JSON metadata only; never print them in the visible question prompt.
 - Do not prefix prompts with labels such as `原文校准｜正经复盘｜单选`, style cue sentences, or `线索：`.
 - Avoid self-conscious AI phrases such as `最稳`, `哪种理解最稳`, `明显是在装懂`, `别急着`, `这题不哄人`, `一眼假`, or `伪理解`.
-- Use plain, answerable wording: ask which statement fits the material, which statements are wrong, whether a statement is true, what concept matches a description, or how to apply a concept in a scenario.
+- Do not write `根据材料`, `符合材料`, `材料里`, or similar wording unless the question visibly prints the source excerpt before asking.
+- Use plain, answerable wording: ask which statement is more accurate, which statements are wrong, whether a statement is true, what concept matches a description, or how to apply a concept in a scenario.
 - Render questions by type section: single-choice, multiple-choice, true/false, fill-in, then short/oral.
 - Distribute objective correct-answer positions across option IDs in main exams and mistake/weekly variants; never let a generated sheet look like every answer is A.
-- After confirmation-based submission, the HTML must switch to a report page with score, type-level score, wrong questions, weak knowledge points, and one export button for an Agent-readable report package.
+- After confirmation-based submission, the HTML must switch to a concise scorecard page with score, type-level score, weak knowledge points, a wrong-question overview, and one export button for an Agent-readable report package.
+- The scorecard must not expand long wrong-question explanations. The exported Agent report carries a teaching dossier plus wrong-question cards: title, source/range, original question, learner answer, correct/reference answer, mistake label, error reason, knowledge explanation, plain-language explanation, and next-time hint.
 - Do not expose multiple export buttons for internal artifacts. `attempt.json`, `exam.json`, and grading instructions belong inside the single exported Agent report.
+- Exam titles must be content-based and archive-friendly, such as `《Agent 与 Workflow：核心概念理解测试》`; do not name generated exams with links or generic `拷打复盘` prefixes.
 
 ## Source Handling
 
@@ -103,7 +108,7 @@ Required files for a normal run:
 - `agent_open_review.md` when `grade.json.open_review.status` is `pending_agent_review`
 - `mistake_bank.jsonl` after recording mistakes
 - `dashboard/index.html`, `dashboard/exams.html`, `dashboard/mistakes.html`, and `dashboard/notes.html` after refreshing the learner dashboard
-- `dashboard/notes_agent_pack.md` when the learner wants an Agent to rewrite notes in a more natural personal voice
+- `dashboard/notes_agent_pack.md` when the learner wants an Agent to rewrite wrong-question review advice in a more natural personal voice
 
 When extraction is blocked, required continuation files are `source_status.json`, `manual_input.txt` or `manual_transcript.txt`, and `manual_text_request.md`; after `ingest-manual`, continue with the normal required files.
 

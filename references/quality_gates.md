@@ -37,6 +37,7 @@ Run these checks before presenting a generated review checklist or report.
 - Generated reviews stay within 15-50 checkpoints.
 - Visible question prompts do not expose internal source-layer labels, style labels, question-type prefixes, or cue sentences.
 - Visible prompts do not contain `原文校准｜`, `线索：`, `最稳`, `哪种理解最稳`, `明显是在装懂`, `别急着`, `这题不哄人`, `一眼假`, or `伪理解`.
+- Prompts, options, and answer hints do not say `根据材料`, `符合材料`, `材料里`, `材料对`, or similar unless the question visibly prints the source excerpt before asking.
 - Questions are grouped by type in the rendered HTML: single-choice, multiple-choice, true/false, fill-in, then short/oral.
 - Objective answer positions are not all the same; single-choice, multiple-choice, and mistake-variant answers should be distributed across option IDs.
 - `复盘模式` has no open or fill-in prompts by default and can be fully scored in the browser.
@@ -58,8 +59,11 @@ Run these checks before presenting a generated review checklist or report.
 - Objective-only reviews produce a complete browser score without requiring a downloaded agent package.
 - The visible HTML action flow is simple: before submission only `提交试卷`; after submission only `导出报告给 Agent`.
 - Submission asks for confirmation before scoring and switching to the report page.
-- After submission, the HTML shows a report with total score, type-level score, wrong questions, weak knowledge points, and next-step instructions.
-- The exported Agent report package includes report summary, objective pregrade, full answers, `attempt.json`, `exam.json`, and instructions to generate `grade.json` and run `record`.
+- After submission, the HTML shows a concise scorecard with total score, type-level score, wrong-question overview, weak knowledge points, and next-step instructions.
+- The HTML scorecard does not expand full wrong-question explanations; detailed wrong-question review belongs in the exported Agent report.
+- The exported Agent report package includes scorecard summary, objective pregrade, a teaching dossier, a structured wrong-question card set, full answers, `attempt.json`, `exam.json`, and instructions to generate `grade.json` and run `record`.
+- Each wrong-question card includes question title, type, knowledge point, learner answer, correct/reference answer, mistake label, error reason, knowledge explanation, plain-language explanation, and next-time hint.
+- Generated exam titles are content-based, archive-friendly, and do not contain source links or generic `拷打复盘` prefixes.
 - Open-answer reviews clearly say the browser score is an objective pregrade and Agent review is needed for short/oral answers.
 - `grade-report <kaoda_agent_report.md>` parses the exported report and writes `attempt.json`, `exam.json`, `grading_prompt.md`, and `grade.json`.
 - `grade.json.open_review.status` is `not_required` for objective-only reviews, `pending_agent_review` before open-answer rubric review, or `completed` after Agent review.
@@ -78,6 +82,7 @@ Run these checks before presenting a generated review checklist or report.
 
 - Mistake bank entries preserve knowledge point and mistake tag.
 - `record` archives exam, HTML exam, attempt, grade, source, material report, deep research, and wrong questions under `data/learners/<id>/archive/`.
+- Wrong-question records preserve the question title, original question, learner answer, correct/reference answer, mistake label, error reason, knowledge explanation, plain-language explanation, and next-time hint.
 - Review exams use variants, not copied prompts.
 - Weekly exams aggregate across recent archive files and mistake bank entries; when fewer than 3 archive sessions exist, the analysis must state the downgrade to mistake-variant weekly review.
 - Old stale mistakes are not deleted silently; mark status instead.
@@ -87,6 +92,8 @@ Run these checks before presenting a generated review checklist or report.
 - `python scripts/kaoda.py dashboard <learner_id>` creates `index.html`, `exams.html`, `mistakes.html`, `notes.html`, and `notes_agent_pack.md`.
 - Dashboard totals match archived `grade.json` question results: answered, correct, wrong, and accuracy.
 - Exam collection rows come from `archive/*/archive_manifest.json` and link only to files that exist.
+- Dashboard status includes generated variant reviews from `review/*/review.html` and weekly syntheses from `weekly/*/weekly_exam.html`.
+- The exam collection page separates formal review records, variant review records, and weekly review records.
 - Wrong-question board comes from `mistake_bank.jsonl`, keeps active/stale status visible, and does not delete old rows.
-- Notes are grouped from real wrong-question knowledge points and mistake tags; they must not invent facts beyond mistakes, evidence, grades, or sources.
+- Review advice is grouped from real wrong-question knowledge points and mistake tags; it must not invent facts beyond mistakes, evidence, grades, or sources.
 - Empty learner history renders friendly empty states instead of failing.

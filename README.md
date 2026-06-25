@@ -2,7 +2,7 @@
 
 > 看完了，不代表你懂。你还要经得起拷问。
 
-`kaoda-review` 是一个给 Claude Code、Codex、Cursor 等本地 Agent 使用的开源 Skill。它可以把视频链接、本地音视频文字稿、PDF、文章、字幕、笔记，或者一个你想学习的主题，转换成一份可在浏览器里完成的“拷打式复盘单”。
+`kaoda-review` 是一个给 Claude Code、Codex、Cursor 等本地 Agent 使用的开源 Skill。它可以把视频链接、本地音视频文字稿、PDF、文章、字幕、笔记，或者一个你想学习的主题，转换成一份可在浏览器里完成的理解诊断复盘。
 
 它不是总结器，也不是普通题库。它的目标是暴露四类最常见的“假懂”：
 
@@ -45,6 +45,17 @@ git clone https://github.com/ziibnchen98-creator/kaoda-review.git ~/.codex/skill
 # Claude Code
 git clone https://github.com/ziibnchen98-creator/kaoda-review.git ~/.claude/skills/kaoda-review
 ```
+
+如果你只想安装命令行工具，或想在仓库里本地开发：
+
+```bash
+git clone https://github.com/ziibnchen98-creator/kaoda-review.git
+cd kaoda-review
+python3 -m pip install -e .
+kaoda-review doctor
+```
+
+安装后可以用 `kaoda-review ...` 代替 `python3 scripts/kaoda.py ...`。源码目录运行时数据默认写入仓库的 `data/`；普通包安装后数据默认写入 `~/.local/share/kaoda-review/`，也可以用 `KAODA_DATA_DIR=/path/to/data` 指定。
 
 安装后，你可以直接对 Agent 说：
 
@@ -107,12 +118,12 @@ python3 scripts/kaoda.py doctor
 | 知识地图 | `material_report.json` | 提取核心概念、机制、边界、误解风险和迁移场景 |
 | 复盘规划 | `exam_brief.json` | 记录模式、题型风格、研究状态和生成契约 |
 | 互动复盘单 | `exam.html` | 单文件 HTML，可直接在浏览器里完成和判分 |
-| 浏览器报告 | `kaoda_agent_report.md` | 答完后一键导出给 Agent，包含答案、分数和评分说明 |
+| 浏览器报告 | `kaoda_agent_report.md` | 答完后一键导出给 Agent，包含成绩单摘要、学习档案、结构化错题卡、答案和评分说明 |
 | Agent 评分 | `grade.json` | 客观题本地评分；短答、口述题只做预检，最终由 Agent 按 rubric 复核 |
 | 错题记忆 | `mistake_bank.jsonl` | 记录薄弱知识点、错因标签和复习优先级 |
 | 变体复习 | `review.html` | 根据错题生成不重复的复习题 |
 | 周复盘 | `weekly_exam.html` | 汇总最近 7 天错题，生成周度综合复盘 |
-| 学习看板 | `dashboard/index.html` | 静态本地看板：总分、正确率、错题、笔记和历史记录 |
+| 学习看板 | `dashboard/index.html` | 静态本地看板：总分、正确率、正式复盘、变体复习、周复盘、错题和复盘建议 |
 | 环境自检 | `doctor` | 检查 Codex 安装态、HTML 模板、数据目录和视频/PDF/OCR 可选依赖 |
 
 ---
@@ -211,7 +222,7 @@ python3 scripts/kaoda.py build-exam token-demo
 open data/runs/token-demo/exam.html
 ```
 
-答完后，在浏览器里点击 `提交试卷`，进入学习报告页，再点击 `导出报告给 Agent`。Agent 拿到报告后可以继续：
+答完后，在浏览器里点击 `提交试卷`，进入简洁成绩单页，再点击 `导出报告给 Agent`。浏览器只展示成绩反馈；详细错题卡和学习档案在导出的报告包里，Agent 拿到后可以继续：
 
 ```bash
 python3 scripts/kaoda.py grade-report kaoda_agent_report.md --learner-id demo-user --out-dir data/runs/demo

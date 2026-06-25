@@ -75,11 +75,17 @@ Do not use these visible prompt patterns:
 
 Prefer direct, plain patterns:
 
-- `关于「X」，哪一项说法更符合材料？`
+- `关于「X」，哪一项说法更准确？`
 - `关于「X」，哪些说法有问题？`
 - `判断对错：...`
-- `材料里和这条描述对应的关键词或短语是什么？描述：... 答案：____。`
+- `这条描述对应的关键词或短语是什么？描述：... 答案：____。`
 - `在「场景」中，如何使用「X」？`
+
+Keep question conditions honest:
+
+- If the visible question does not show a source excerpt, do not write `根据材料`, `符合材料`, `材料里`, or similar wording in the prompt, options, or answer hint.
+- Use `关于「X」...`, `这条描述...`, or `根据你对本次复盘内容的理解...` when the source evidence is stored in JSON rather than printed above the question.
+- If a question truly requires reading a source excerpt, print the excerpt before the question and make that relationship explicit.
 
 The UI should render sections in this order: single-choice, multiple-choice, true/false, fill-in, then short/oral. Keep internal metadata in JSON for grading and archive use, not in the visible question text.
 
